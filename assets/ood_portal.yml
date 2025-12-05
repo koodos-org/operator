@@ -1,0 +1,2 @@
+pun_max_retries: 50
+pun_stage_cmd: '/opt/krood/utils/create-pun.sh'

@@ -1,0 +1,136 @@
+user        <%= user %> '<%= group %>';  ## Default: nobody
+error_log   <%= error_log_path %>;
+pid         <%= pid_path %>;
+worker_processes 1;  ## Default: 1
+
+<%- env_declarations.sort.uniq.each do |varname| -%>
+env <%= varname %>;
+<%- end -%>
+env PASSENGER_DOWNLOAD_NATIVE_SUPPORT_BINARY=0;
+
+events {
+  worker_connections 1024;  ## Default: 1024
+}
+
+http {
+  include     <%= mime_types_path %>;
+
+  # Define passenger environment
+  passenger_root <%= passenger_root %>;
+  passenger_ruby <%= passenger_ruby %>;
+  <%- if passenger_nodejs -%>
+  passenger_nodejs <%= passenger_nodejs %>;
+  <%- end -%>
+  <%- if passenger_python -%>
+  passenger_python <%= passenger_python %>;
+  <%- end -%>
+
+  # Set passenger security measures
+  passenger_user_switching off;
+  passenger_default_user <%= user %>;
+  passenger_load_shell_envvars off;
+  # users can't update passenger anyhow
+  passenger_disable_security_update_check on;
+
+  <%- if disable_bundle_user_config? -%>
+  passenger_env_var BUNDLE_USER_CONFIG /dev/null;
+  passenger_preload_bundler on;
+
+  <%- end -%>
+
+  server_tokens off;
+  passenger_show_version_in_header off;
+
+  # Kill all apps after they idle timeout
+  passenger_min_instances 0;
+
+  # Limit app instances to 1 so apps can safely utilize in memory session data
+  passenger_max_instances_per_app 1;
+
+  # Take advantage of Ruby preloader
+  #passenger_spawn_method smart;
+  #passenger_max_preloader_idle_time 0;
+
+  # Load all apps directly
+  passenger_spawn_method direct;
+
+  <%- if passenger_pool_idle_time -%>
+  passenger_pool_idle_time <%= passenger_pool_idle_time %>;
+
+  <%- end -%>
+  <%- if passenger_log_file -%>
+  passenger_log_file <%= passenger_log_file %>;
+  <%- end -%>
+  <%- unless passenger_options.to_h.has_key?(:passenger_disable_anonymous_telemetry) -%>
+  passenger_disable_anonymous_telemetry <%= passenger_disable_anonymous_telemetry %>;
+  <%- end -%>
+<%- passenger_options.to_h.each_pair do |key, value| -%>
+  <%= key %> <%= value %>;
+<%- end -%>
+
+  # Set an array of temp and cache file options for the per-user environment
+  client_body_temp_path   <%= tmp_root %>/client_body;
+  proxy_temp_path         <%= tmp_root %>/proxy_temp;
+  fastcgi_temp_path       <%= tmp_root %>/fastcgi_temp;
+  uwsgi_temp_path         <%= tmp_root %>/uwsgi_temp;
+  scgi_temp_path          <%= tmp_root %>/scgi_temp;
+  passenger_temp_path     <%= tmp_root %>/passenger_temp;
+
+  default_type application/octet-stream;
+
+  log_format   main '<%= log_format %>';
+
+  access_log   <%= access_log_path %> main;
+  sendfile     on;
+  tcp_nopush   on;
+  client_max_body_size <%= nginx_file_upload_max %>;
+
+  server {
+    listen      443;
+    server_name localhost;
+
+    location @error_404 {
+      default_type text/html;
+      return 404 '<%= restart_confirmation %>';
+    }
+
+    <%- if app_init_url -%>
+    location / {
+      error_page 404 @error_404;
+    }
+    <%- end -%>
+
+    # Give apps the ability to download files from filesystem
+    location <%= sendfile_uri %> {
+      internal;
+      alias "<%= sendfile_root %>";
+    }
+
+    <%- if missing_home_directory? -%>
+    rewrite ^/pun/sys/dashboard(/.*|$) /pun/custom_html/missing_home_directory.html;
+    <%- end -%>
+
+    location = /pun/custom_html/missing_home_directory.html {
+      add_header Cache-Control "no-store";
+      root <%= custom_html_root %>;
+      try_files /missing_home_directory.html /pun/html/missing_home_directory.html;
+    }
+
+    location ~ /pun/html/([0-9a-z_\.]+)$ {
+      add_header Cache-Control "no-store";
+      alias <%= default_html_root %>/$1;
+    }
+
+    # redirect all the old apps to the dashboard
+    rewrite ^/pun/sys/activejobs(/.*|$)$ /pun/sys/dashboard/activejobs$1 permanent;
+    rewrite ^/pun/sys/files(/.*|$)$ /pun/sys/dashboard/files$1 permanent;
+    rewrite ^/pun/sys/file-editor/?$ /pun/sys/dashboard/files$1 permanent;
+    rewrite ^/pun/sys/file-editor/edit(/.*|$)$ /pun/sys/dashboard/files/edit/fs$1 permanent;
+    rewrite ^/pun/sys/file-editor(/.*|$)$ /pun/sys/dashboard/files/fs$1 permanent;
+
+    # Include all app configs user has access to
+    <%- app_configs.each do |app_config| -%>
+    include <%= app_config %>;
+    <%- end -%>
+  }
+}

@@ -1,0 +1,69 @@
+mod crds;
+mod fep;
+mod ood;
+mod pun;
+use clap::Parser;
+use clap::Subcommand;
+use clap::ValueEnum;
+use tracing::error;
+use tracing_subscriber;
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    #[command()]
+    Controller { resources: Resources },
+    #[command()]
+    Crd { resources: Resources },
+}
+
+#[derive(ValueEnum, Debug, Copy, Clone, PartialEq, Eq)]
+enum Resources {
+    Pun,
+    Fep,
+    Ood,
+    All,
+}
+
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt::init();
+    let args = Args::parse();
+
+    match args.command {
+        Commands::Controller { resources } => {
+            let result = match resources {
+                Resources::Pun => pun::controller().await,
+                Resources::Ood => ood::controller().await,
+                Resources::Fep => fep::controller().await,
+                Resources::All => {
+                    tokio::join!(pun::controller(), ood::controller(), fep::controller()).0
+                }
+            };
+
+            error!("Controller {resources:?} with {result:?}");
+        }
+        Commands::Crd { resources } => match resources {
+            Resources::Pun => {
+                println!("{}", pun::crd());
+            }
+            Resources::Fep => {
+                println!("{}", fep::crd());
+            }
+            Resources::Ood => {
+                println!("{}", ood::crd());
+            }
+            Resources::All => {
+                print!("{}---\n", fep::crd());
+                print!("{}---\n", pun::crd());
+                println!("{}", ood::crd());
+            }
+        },
+    }
+}

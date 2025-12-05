@@ -1,0 +1,35 @@
+name: Build and Push Multiple Images
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      packages: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Build operator image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./operator-image
+          file: ./operator-image/Containerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/operator-image:latest
+            ghcr.io/${{ github.repository_owner }}/operator-image:${{ github.sha }}

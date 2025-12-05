@@ -1,0 +1,8 @@
+apiVersion: ondemand.dev/v1
+kind: Pun
+metadata:
+  name: "$DNS_OOD_USER"
+  namespace: "$NAMESPACE"
+spec: 
+  user: "$OOD_USER"
+  image: "$KOODO_IMAGE"
