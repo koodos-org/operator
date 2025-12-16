@@ -24,7 +24,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build operator image
+      - name: Build operator compatible OOD image
         uses: docker/build-push-action@v6
         with:
           context: ./operator-image
@@ -34,7 +34,7 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/operator-image:latest
             ghcr.io/${{ github.repository_owner }}/operator-image:${{ github.sha }}
 
-      - name: Build operator compatible OOD image
+      - name: Build operator image
         uses: docker/build-push-action@v6
         with:
           context: ./
