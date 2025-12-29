@@ -1,8 +1,7 @@
 // Nightly clippy (0.1.64) considers Drop a side effect, see https://github.com/rust-lang/rust-clippy/issues/9608
 #![allow(clippy::unnecessary_lazy_evaluations)]
-use crate::crds::{FrontEndProxy, FrontEndProxySpec, OpenOnDemand, OpenOnDemandStatus};
+use crate::crds::{FrontEndProxy, FrontEndProxySpec, HTTPDObj, OpenOnDemand, OpenOnDemandStatus};
 use anyhow::Result;
-use chrono::Utc;
 use futures::StreamExt;
 use k8s_openapi::api::apps::v1::{DaemonSet, DaemonSetSpec};
 use k8s_openapi::api::core::v1::*;
@@ -81,7 +80,6 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
         "nginx_stage.yml".to_string(),
         serde_yaml::to_string(&krood_nginx_stage_config).unwrap(),
     );
-
     let svc = Service {
         metadata: ObjectMeta {
             name: Some(cluster_name.clone()),
@@ -111,11 +109,21 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
         ..Default::default()
     };
 
-    let mut sssd_config = BTreeMap::new();
-    sssd_config.insert(
-        "sssd.conf".to_string(),
-        generator.spec.sssd.clone().unwrap().config,
-    );
+    let mut sssd_config = None;
+    if generator
+        .spec
+        .sssd
+        .clone()
+        .map(|obj| obj.enabled)
+        .unwrap_or(false)
+    {
+        let mut inner_config = BTreeMap::new();
+        inner_config.insert(
+            "sssd.conf".to_string(),
+            generator.spec.sssd.clone().unwrap().config,
+        );
+        sssd_config = Some(inner_config);
+    }
 
     let sssd_cm = ConfigMap {
         metadata: ObjectMeta {
@@ -123,7 +131,7 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
             owner_references: Some(vec![oref.clone()]),
             ..Default::default()
         },
-        data: Some(sssd_config),
+        data: sssd_config,
         ..Default::default()
     };
 
@@ -143,88 +151,119 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
             name: Some(format!("httpd")),
             labels: Some(labels.clone()),
             owner_references: Some(vec![oref.clone()]),
+
             ..Default::default()
         },
         spec: FrontEndProxySpec {
             name: "httpd".to_string(),
-            image: generator.spec.image.clone(),
+            sssd: generator.spec.sssd.clone(),
+            httpd: HTTPDObj {
+                image: generator.spec.httpd.image.clone(),
+                extra_volume_mount: None,
+                extra_volumes: None,
+            },
         },
     };
 
-    let mut ds_label = BTreeMap::new();
-    ds_label.insert("ood-component".to_string(), "sssd".to_string());
-    let sssd_ds = DaemonSet {
-        metadata: ObjectMeta {
-            name: Some(format!("{}-sssd", cluster_name.clone())),
-            labels: Some(ds_label.clone()),
-            owner_references: Some(vec![oref.clone()]),
-            ..Default::default()
-        },
-        spec: Some(DaemonSetSpec {
-            selector: LabelSelector {
-                match_labels: Some(ds_label.clone()),
+    // TODO: Refactor out
+    if generator
+        .spec
+        .sssd
+        .clone()
+        .map(|obj| obj.enabled)
+        .unwrap_or(false)
+    {
+        let mut ds_label = BTreeMap::new();
+        ds_label.insert("ood-component".to_string(), "sssd".to_string());
+        let sssd_ds = DaemonSet {
+            metadata: ObjectMeta {
+                name: Some(format!("{}-sssd", cluster_name.clone())),
+                labels: Some(ds_label.clone()),
+                owner_references: Some(vec![oref.clone()]),
                 ..Default::default()
             },
-            template: PodTemplateSpec {
-                metadata: Some(ObjectMeta {
-                    labels: Some(ds_label.clone()),
+            spec: Some(DaemonSetSpec {
+                selector: LabelSelector {
+                    match_labels: Some(ds_label.clone()),
                     ..Default::default()
-                }),
-                spec: Some(PodSpec {
-                    security_context: Some(PodSecurityContext {
-                        run_as_user: Some(0),
+                },
+                template: PodTemplateSpec {
+                    metadata: Some(ObjectMeta {
+                        labels: Some(ds_label.clone()),
                         ..Default::default()
                     }),
-                    containers: vec![Container {
-                        name: "sssd".to_string(),
-                        image: Some(generator.spec.sssd.clone().unwrap().image),
-                        volume_mounts: Some(vec![
-                            VolumeMount {
-                                mount_path: "/var/lib/sss/pipes".to_string(),
-                                name: "sssd-pipes".to_string(),
+                    spec: Some(PodSpec {
+                        security_context: Some(PodSecurityContext {
+                            run_as_user: Some(0),
+                            ..Default::default()
+                        }),
+                        containers: vec![Container {
+                            name: "sssd".to_string(),
+                            image: Some(generator.spec.sssd.clone().unwrap().image),
+                            volume_mounts: Some(vec![
+                                VolumeMount {
+                                    mount_path: "/var/lib/sss/pipes".to_string(),
+                                    name: "sssd-pipes".to_string(),
+                                    ..Default::default()
+                                },
+                                VolumeMount {
+                                    mount_path: "/etc/sssd/sssd.conf".to_string(),
+                                    name: "sssd-config".to_string(),
+                                    sub_path: Some("sssd.conf".to_string()),
+                                    ..Default::default()
+                                },
+                            ]),
+                            ..Default::default()
+                        }],
+                        volumes: Some(vec![
+                            Volume {
+                                name: "sssd-config".to_string(),
+                                config_map: Some(ConfigMapVolumeSource {
+                                    name: format!("{}-sssd-config-file", cluster_name.clone()),
+                                    items: Some(vec![KeyToPath {
+                                        key: "sssd.conf".to_string(),
+                                        path: "sssd.conf".to_string(),
+                                        mode: Some(0o0600),
+                                    }]),
+                                    ..Default::default()
+                                }),
                                 ..Default::default()
                             },
-                            VolumeMount {
-                                mount_path: "/etc/sssd/sssd.conf".to_string(),
-                                name: "sssd-config".to_string(),
-                                sub_path: Some("sssd.conf".to_string()),
+                            Volume {
+                                name: "sssd-pipes".to_string(),
+                                host_path: Some(HostPathVolumeSource {
+                                    path: "/var/run/sssd-pipes".to_string(),
+                                    type_: Some("DirectoryOrCreate".to_string()),
+                                }),
                                 ..Default::default()
                             },
                         ]),
                         ..Default::default()
-                    }],
-                    volumes: Some(vec![
-                        Volume {
-                            name: "sssd-config".to_string(),
-                            config_map: Some(ConfigMapVolumeSource {
-                                name: format!("{}-sssd-config-file", cluster_name.clone()),
-                                items: Some(vec![KeyToPath {
-                                    key: "sssd.conf".to_string(),
-                                    path: "sssd.conf".to_string(),
-                                    mode: Some(0o0600),
-                                }]),
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        },
-                        Volume {
-                            name: "sssd-pipes".to_string(),
-                            host_path: Some(HostPathVolumeSource {
-                                path: "/var/run/sssd-pipes".to_string(),
-                                type_: Some("DirectoryOrCreate".to_string()),
-                            }),
-                            ..Default::default()
-                        },
-                    ]),
+                    }),
                     ..Default::default()
-                }),
+                },
                 ..Default::default()
-            },
+            }),
             ..Default::default()
-        }),
-        ..Default::default()
-    };
+        };
 
+        let ds_api = Api::<DaemonSet>::namespaced(
+            client.clone(),
+            generator
+                .metadata
+                .namespace
+                .as_ref()
+                .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
+        );
+        ds_api
+            .patch(
+                sssd_ds.metadata.name.as_ref().unwrap(),
+                &PatchParams::apply("frontendproxies.ondemand.dev"),
+                &Patch::Apply(&sssd_ds),
+            )
+            .await
+            .map_err(Error::SvcCreationFailed)?;
+    }
     // Getting Kubernetes API clients for needed resources
     let svc_api = Api::<Service>::namespaced(
         client.clone(),
@@ -243,15 +282,6 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
             .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
     );
     let fep_api = Api::<FrontEndProxy>::namespaced(
-        client.clone(),
-        generator
-            .metadata
-            .namespace
-            .as_ref()
-            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-    );
-
-    let ds_api = Api::<DaemonSet>::namespaced(
         client.clone(),
         generator
             .metadata
@@ -310,15 +340,6 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
                 .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
             &PatchParams::apply("frontendproxies.ondemand.dev"),
             &Patch::Apply(&svc),
-        )
-        .await
-        .map_err(Error::SvcCreationFailed)?;
-
-    ds_api
-        .patch(
-            sssd_ds.metadata.name.as_ref().unwrap(),
-            &PatchParams::apply("frontendproxies.ondemand.dev"),
-            &Patch::Apply(&sssd_ds),
         )
         .await
         .map_err(Error::SvcCreationFailed)?;

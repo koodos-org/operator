@@ -62,6 +62,74 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         ..Default::default()
     };
 
+    let mut volumes = vec![];
+
+    // let nfs_vol = Volume {
+    //     name: "home-nfs".to_string(),
+    //     persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
+    //         claim_name: "pvc-nfs-static".to_string(),
+    //         ..Default::default()
+    //     }),
+    //     ..Default::default()
+    // };
+    // volumes.push(nfs_vol);
+    // let sssd_vol = Volume {
+    //     name: "sssd-host-pipe".to_string(),
+    //     host_path: Some(HostPathVolumeSource {
+    //         path: "/var/run/sssd-pipes".to_string(),
+    //         type_: Some("Directory".to_string()),
+    //     }),
+    //
+    //     ..Default::default()
+    // };
+    let config_vol = Volume {
+        name: "clusters-d".to_string(),
+        config_map: Some(ConfigMapVolumeSource {
+            name: format!(
+                "stormhead-work-ood-cluster-config-files",
+                //&generator
+                //    .metadata
+                //    .labels.clone()
+                //    .unwrap()
+                //    .get("ood-cluster")
+                //    .unwrap()
+            ),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    volumes.push(config_vol);
+
+    let mut volume_mounts = vec![];
+    // if generator
+    //     .spec
+    //     .sssd
+    //     .clone()
+    //     .map(|obj| obj.enabled)
+    //     .unwrap_or(false)
+    // {
+    //     volumes.push(sssd_vol);
+    //     let sssd_vol_mount = VolumeMount {
+    //         name: "sssd-host-pipe".to_string(),
+    //         mount_path: "/var/lib/sss/pipes".to_string(),
+    //         ..Default::default()
+    //     };
+    //     volume_mounts.push(sssd_vol_mount);
+    // }
+    //
+    let cluster_volume_mount = VolumeMount {
+        mount_path: "/etc/ood/config/clusters.d".to_string(),
+        name: "clusters-d".to_string(),
+        ..Default::default()
+    };
+
+    volume_mounts.push(cluster_volume_mount);
+    // let nfs_vol_mount = VolumeMount {
+    //     mount_path: "/home".to_string(),
+    //     name: "home-nfs".to_string(),
+    //     ..Default::default()
+    // };
+    // volume_mounts.push(nfs_vol_mount);
     // Pod creation
     let pod = Pod {
         metadata: ObjectMeta {
@@ -76,29 +144,13 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         },
         spec: Some(PodSpec {
             containers: vec![Container {
-                image: Some(generator.spec.image.clone()),
+                image: Some(generator.spec.httpd.image.clone()),
                 image_pull_policy: Some("Always".to_string()),
                 security_context: Some(SecurityContext {
                     ..Default::default()
                 }),
                 name: generator.metadata.name.clone().unwrap(),
-                volume_mounts: Some(vec![
-                    VolumeMount {
-                        name: "sssd-host-pipe".to_string(),
-                        mount_path: "/var/lib/sss/pipes".to_string(),
-                        ..Default::default()
-                    },
-                    VolumeMount {
-                        mount_path: "/etc/ood/config/clusters.d".to_string(),
-                        name: "clusters-d".to_string(),
-                        ..Default::default()
-                    },
-                    VolumeMount {
-                        mount_path: "/home".to_string(),
-                        name: "home-nfs".to_string(),
-                        ..Default::default()
-                    },
-                ]),
+                volume_mounts: Some(volume_mounts),
                 command: Some(vec![
                     "/opt/krood/pun_entry.sh".to_string(),
                     generator.spec.user.to_string(),
@@ -106,42 +158,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
 
                 ..Default::default()
             }],
-            volumes: Some(vec![
-                // TODO: fix this
-                Volume {
-                    name: "home-nfs".to_string(),
-                    persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
-                        claim_name: "pvc-nfs-static".to_string(),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                Volume {
-                    name: "sssd-host-pipe".to_string(),
-                    host_path: Some(HostPathVolumeSource {
-                        path: "/var/run/sssd-pipes".to_string(),
-                        type_: Some("Directory".to_string()),
-                    }),
-
-                    ..Default::default()
-                },
-                Volume {
-                    name: "clusters-d".to_string(),
-                    config_map: Some(ConfigMapVolumeSource {
-                        name: format!(
-                            "stormhead-work-ood-cluster-config-files",
-                            //&generator
-                            //    .metadata
-                            //    .labels.clone()
-                            //    .unwrap()
-                            //    .get("ood-cluster")
-                            //    .unwrap()
-                        ),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            ]),
+            volumes: Some(volumes),
             ..Default::default()
         }),
         ..Default::default()

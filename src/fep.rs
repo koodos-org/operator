@@ -1,13 +1,20 @@
 // Nightly clippy (0.1.64) considers Drop a side effect, see https://github.com/rust-lang/rust-clippy/issues/9608
 #![allow(clippy::unnecessary_lazy_evaluations)]
 
-use crate::crds::FrontEndProxy;
+use crate::crds::{FrontEndProxy, InteractiveApp};
 use anyhow::Result;
 use futures::StreamExt;
-use k8s_openapi::api::core::v1::*;
+use k8s_openapi::{
+    api::{
+        apps::v1::{Deployment, DeploymentSpec},
+        core::v1::*,
+        rbac::v1::{PolicyRule, Role, RoleBinding, RoleRef, Subject},
+    },
+    apimachinery::pkg::apis::meta::v1::LabelSelector,
+};
 use kube::{
     Client, CustomResourceExt,
-    api::{Api, ObjectMeta, Patch, PatchParams, Resource},
+    api::{Api, ListParams, ObjectMeta, Patch, PatchParams, PostParams, Resource},
     runtime::{
         controller::{Action, Config, Controller},
         watcher,
@@ -34,73 +41,52 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
 
     let labels = generator.metadata.labels.clone().unwrap();
 
-    // Pod creation
-    let pod = Pod {
-        metadata: ObjectMeta {
-            name: Some(generator.spec.name.clone()),
-            namespace: generator.metadata.namespace.clone(),
-            owner_references: Some(vec![oref]),
-            labels: Some(labels),
-            ..ObjectMeta::default()
-        },
-        spec: Some(PodSpec {
-            service_account_name: Some("pun-creator".to_string()),
-            containers: vec![Container {
-                env: Some(vec![EnvVar {
-                    name: "KOODO_IMAGE".to_string(),
-                    value: Some(generator.spec.image.clone()),
-                    value_from: None,
-                }]),
-                image: Some(generator.spec.image.clone()),
-                image_pull_policy: Some("Always".to_string()),
-                name: generator.spec.name.clone(),
-                volume_mounts: Some(vec![
-                    VolumeMount {
-                        name: "sssd-host-pipe".to_string(),
-                        mount_path: "/var/lib/sss/pipes".to_string(),
-                        ..Default::default()
-                    },
-                    VolumeMount {
-                    mount_path: "/etc/ood/config/ood_portal.yml".to_string(),
-                    name: "ood-portal".to_string(),
-                    sub_path: Some("ood_portal.yml".to_string()),
-                    ..Default::default()
-                }]),
-                ..Default::default()
-            }],
-            volumes: Some(vec![
-                Volume {
-                    name: "sssd-host-pipe".to_string(),
-                    host_path: Some(HostPathVolumeSource {
-                        path: "/var/run/sssd-pipes".to_string(),
-                        type_: Some("Directory".to_string()),
-                    }),
-                    ..Default::default()
-                },
-                Volume {
-                    name: "ood-portal".to_string(),
-                    config_map: Some(ConfigMapVolumeSource {
-                        name: format!(
-                            "{}-ood-config-files",
-                            &generator
-                                .metadata
-                                .labels
-                                .clone()
-                                .unwrap()
-                                .get("ood-cluster")
-                                .unwrap()
-                        ),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            ]),
-            ..Default::default()
-        }),
+    let obj_meta = ObjectMeta {
+        labels: Some(labels.clone()),
+        name: Some("fep-cluster".to_string()),
+        namespace: Some(
+            generator
+                .metadata
+                .namespace
+                .as_ref()
+                .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?
+                .to_string(),
+        ),
+        owner_references: Some(vec![oref.clone()]),
         ..Default::default()
     };
 
-    let pod_api = Api::<Pod>::namespaced(
+    let role = Role {
+        metadata: obj_meta.clone(),
+        rules: Some(vec![PolicyRule {
+            api_groups: Some(vec!["ondemand.dev"].iter().map(|string| string.to_string()).collect()),
+            resources: Some(vec!["puns"].iter().map(|string| string.to_string()).collect()),
+            verbs: vec!["create","patch","update"].iter().map(|string| string.to_string()).collect(),
+            ..Default::default()
+        }]),
+    };
+
+    let role_binding = RoleBinding {
+        metadata: obj_meta.clone(),
+        role_ref: RoleRef {
+            api_group: "rbac.authorization.k8s.io".to_string(),
+            kind: "Role".to_string(),
+            name: obj_meta.name.clone().ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
+        },
+        subjects: Some(vec![Subject {
+            kind: "ServiceAccount".to_string(),
+            name: obj_meta.name.clone().ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
+            namespace: Some(generator.metadata.namespace.clone().ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?),
+            ..Default::default()
+        }]),
+    };
+
+    let service_account = ServiceAccount {
+        metadata: obj_meta,
+        ..Default::default()
+    };
+
+    let role_api = Api::<Role>::namespaced(
         client.clone(),
         generator
             .metadata
@@ -109,14 +95,198 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
             .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
     );
 
-    pod_api
+    role_api
         .patch(
-            pod.metadata
+            role
+                .metadata
                 .name
                 .as_ref()
                 .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
-            &PatchParams::apply("frontendproxies.ondemand.dev"),
-            &Patch::Apply(&pod),
+            &PatchParams::apply("roles"),
+            &Patch::Apply(&role),
+        )
+        .await
+        .map_err(Error::HTTPDPodCreationFailed)?;
+
+    let rolebinding_api = Api::<RoleBinding>::namespaced(
+        client.clone(),
+        generator
+            .metadata
+            .namespace
+            .as_ref()
+            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
+    );
+
+    rolebinding_api
+        .patch(
+            role_binding
+                .metadata
+                .name
+                .as_ref()
+                .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
+            &PatchParams::apply("role_binding"),
+            &Patch::Apply(&role_binding),
+        )
+        .await
+        .map_err(Error::HTTPDPodCreationFailed)?;
+
+    let sa_api = Api::<ServiceAccount>::namespaced(
+        client.clone(),
+        generator
+            .metadata
+            .namespace
+            .as_ref()
+            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
+    );
+
+    sa_api
+        .patch(
+            service_account
+                .metadata
+                .name
+                .as_ref()
+                .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
+            &PatchParams::apply("deployments"),
+            &Patch::Apply(&service_account),
+        )
+        .await
+        .map_err(Error::HTTPDPodCreationFailed)?;
+
+    let mut volumes = vec![];
+    let mut volume_mounts = vec![];
+    let config_volume = Volume {
+        name: "ood-portal".to_string(),
+        config_map: Some(ConfigMapVolumeSource {
+            name: format!(
+                "{}-ood-config-files",
+                &generator
+                    .metadata
+                    .labels
+                    .clone()
+                    .unwrap()
+                    .get("ood-cluster")
+                    .unwrap()
+            ),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    volumes.push(config_volume);
+
+    let config_vol_mount = VolumeMount {
+        mount_path: "/etc/ood/config/ood_portal.yml".to_string(),
+        name: "ood-portal".to_string(),
+        sub_path: Some("ood_portal.yml".to_string()),
+        ..Default::default()
+    };
+    volume_mounts.push(config_vol_mount);
+
+    if generator
+        .spec
+        .sssd
+        .clone()
+        .map(|obj| obj.enabled)
+        .unwrap_or(false)
+    {
+        let sssd_volume = Volume {
+            name: "sssd-host-pipe".to_string(),
+            host_path: Some(HostPathVolumeSource {
+                path: "/var/run/sssd-pipes".to_string(),
+                type_: Some("Directory".to_string()),
+            }),
+            ..Default::default()
+        };
+        let sssd_vol_mount = VolumeMount {
+            name: "sssd-host-pipe".to_string(),
+            mount_path: "/var/lib/sss/pipes".to_string(),
+            ..Default::default()
+        };
+        volumes.push(sssd_volume);
+        volume_mounts.push(sssd_vol_mount);
+    }
+
+    let iapps_api = Api::<InteractiveApp>::namespaced(
+        client.clone(),
+        generator
+            .metadata
+            .namespace
+            .as_ref()
+            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
+    );
+
+    let lp = ListParams::default().labels(&format!("Hello {}", "1234"));
+    let _iapps = iapps_api.list(&lp);
+
+    // Pod creation
+    let pod = Pod {
+        metadata: ObjectMeta {
+            name: Some(generator.spec.name.clone()),
+            namespace: generator.metadata.namespace.clone(),
+            owner_references: Some(vec![oref]),
+            labels: Some(labels.clone()),
+            ..ObjectMeta::default()
+        },
+        spec: Some(PodSpec {
+            service_account_name: Some("fep-cluster".to_string()),
+            containers: vec![Container {
+                env: Some(vec![EnvVar {
+                    name: "KOODO_IMAGE".to_string(),
+                    value: Some(generator.spec.httpd.image.clone()),
+                    value_from: None,
+                }]),
+                image: Some(generator.spec.httpd.image.clone()),
+                image_pull_policy: Some("Always".to_string()),
+                name: generator.spec.name.clone(),
+                volume_mounts: Some(volume_mounts),
+                ..Default::default()
+            }],
+            volumes: Some(volumes),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let deploy = Deployment {
+        metadata: ObjectMeta {
+            name: Some(format!(
+                "{}-fep",
+                generator.metadata.name.clone().unwrap_or("ood".to_string())
+            )),
+            namespace: generator.metadata.namespace.clone(),
+            ..Default::default()
+        },
+        spec: Some(DeploymentSpec {
+            selector: LabelSelector {
+                match_expressions: None,
+                match_labels: Some(labels),
+            },
+            template: PodTemplateSpec {
+                metadata: Some(pod.metadata),
+                spec: pod.spec,
+            },
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let deploy_api = Api::<Deployment>::namespaced(
+        client.clone(),
+        generator
+            .metadata
+            .namespace
+            .as_ref()
+            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
+    );
+
+    deploy_api
+        .patch(
+            deploy
+                .metadata
+                .name
+                .as_ref()
+                .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
+            &PatchParams::apply("deployments"),
+            &Patch::Apply(&deploy),
         )
         .await
         .map_err(Error::HTTPDPodCreationFailed)?;
@@ -143,13 +313,17 @@ pub async fn controller() -> Result<()> {
 
     // Api clients
     let feps = Api::<FrontEndProxy>::all(client.clone());
-    let pods = Api::<Pod>::all(client.clone());
+    let sas = Api::<ServiceAccount>::all(client.clone());
+    let deployments = Api::<Deployment>::all(client.clone());
+    let iapps = Api::<InteractiveApp>::all(client.clone());
 
     // limit the controller to running a maximum of two concurrent reconciliations
     let config = Config::default().concurrency(2);
 
     Controller::new(feps, watcher::Config::default())
-        .owns(pods, watcher::Config::default())
+        .owns(deployments, watcher::Config::default())
+        .owns(iapps, watcher::Config::default())
+        .owns(sas, watcher::Config::default())
         .with_config(config)
         .shutdown_on_signal()
         .run(reconcile, error_policy, Arc::new(Data { client }))
@@ -165,5 +339,7 @@ pub async fn controller() -> Result<()> {
 }
 
 pub fn crd() -> String {
-    serde_yaml::to_string(&FrontEndProxy::crd()).unwrap()
+    let fep_crd = serde_yaml::to_string(&FrontEndProxy::crd()).unwrap();
+    let app_crd = serde_yaml::to_string(&InteractiveApp::crd()).unwrap();
+    return format!("{}---\n{}", fep_crd, app_crd);
 }
