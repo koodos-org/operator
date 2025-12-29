@@ -37,16 +37,32 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
 
     let mut labels = BTreeMap::new();
 
-    labels.insert("app".to_string(), "pun".to_string());
+    labels.insert("ood-component".to_string(), "pun".to_string());
     labels.insert("user".to_string(), generator.spec.user.clone());
+
+    let ood_instance_name = generator
+        .metadata
+        .labels
+        .as_ref()
+        .ok_or_else(|| Error::MissingObjectKey(".metadata.labels"))?
+        .get("ood-cluster")
+        .ok_or_else(|| Error::MissingObjectKey(".metadata.labels.ood-cluster"))?;
+
+    let resource_name_base = generator
+        .metadata
+        .name
+        .as_ref()
+        .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
+    let current_namespace = generator
+        .metadata
+        .namespace
+        .as_ref()
+        .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?;
 
     let svc = Service {
         metadata: ObjectMeta {
-            name: Some(format!(
-                "nginx-{}",
-                generator.metadata.name.clone().unwrap()
-            )),
-            namespace: generator.metadata.namespace.clone(),
+            name: Some(format!("nginx-{}", resource_name_base)),
+            namespace: Some(current_namespace.to_string()),
             owner_references: Some(vec![oref.clone()]),
             ..Default::default()
         },
@@ -85,15 +101,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     let config_vol = Volume {
         name: "clusters-d".to_string(),
         config_map: Some(ConfigMapVolumeSource {
-            name: format!(
-                "stormhead-work-ood-cluster-config-files",
-                //&generator
-                //    .metadata
-                //    .labels.clone()
-                //    .unwrap()
-                //    .get("ood-cluster")
-                //    .unwrap()
-            ),
+            name: format!("{}-ood-cluster-config-files", ood_instance_name),
             ..Default::default()
         }),
         ..Default::default()
@@ -137,7 +145,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
                 "nginx-{}",
                 generator.metadata.name.clone().unwrap()
             )),
-            namespace: generator.metadata.namespace.clone(),
+            namespace: Some(current_namespace.to_string()),
             labels: Some(labels),
             owner_references: Some(vec![oref]),
             ..ObjectMeta::default()
@@ -149,7 +157,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
                 security_context: Some(SecurityContext {
                     ..Default::default()
                 }),
-                name: generator.metadata.name.clone().unwrap(),
+                name: format!("{}", resource_name_base),
                 volume_mounts: Some(volume_mounts),
                 command: Some(vec![
                     "/opt/krood/pun_entry.sh".to_string(),
@@ -163,23 +171,9 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         }),
         ..Default::default()
     };
-    let pod_api = Api::<Pod>::namespaced(
-        client.clone(),
-        generator
-            .metadata
-            .namespace
-            .as_ref()
-            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-    );
+    let pod_api = Api::<Pod>::namespaced(client.clone(), current_namespace);
 
-    let svc_api = Api::<Service>::namespaced(
-        client.clone(),
-        generator
-            .metadata
-            .namespace
-            .as_ref()
-            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-    );
+    let svc_api = Api::<Service>::namespaced(client.clone(), current_namespace);
 
     pod_api
         .patch(

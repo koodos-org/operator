@@ -40,18 +40,16 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     let oref = generator.controller_owner_ref(&()).unwrap();
 
     let labels = generator.metadata.labels.clone().unwrap();
+    let current_namespace = generator
+        .metadata
+        .namespace
+        .as_ref()
+        .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?;
 
     let obj_meta = ObjectMeta {
         labels: Some(labels.clone()),
         name: Some("fep-cluster".to_string()),
-        namespace: Some(
-            generator
-                .metadata
-                .namespace
-                .as_ref()
-                .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?
-                .to_string(),
-        ),
+        namespace: Some(current_namespace.to_string()),
         owner_references: Some(vec![oref.clone()]),
         ..Default::default()
     };
@@ -59,9 +57,22 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     let role = Role {
         metadata: obj_meta.clone(),
         rules: Some(vec![PolicyRule {
-            api_groups: Some(vec!["ondemand.dev"].iter().map(|string| string.to_string()).collect()),
-            resources: Some(vec!["puns"].iter().map(|string| string.to_string()).collect()),
-            verbs: vec!["create","patch","update"].iter().map(|string| string.to_string()).collect(),
+            api_groups: Some(
+                vec!["ondemand.dev"]
+                    .iter()
+                    .map(|string| string.to_string())
+                    .collect(),
+            ),
+            resources: Some(
+                vec!["puns"]
+                    .iter()
+                    .map(|string| string.to_string())
+                    .collect(),
+            ),
+            verbs: vec!["create", "patch", "update"]
+                .iter()
+                .map(|string| string.to_string())
+                .collect(),
             ..Default::default()
         }]),
     };
@@ -71,12 +82,18 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         role_ref: RoleRef {
             api_group: "rbac.authorization.k8s.io".to_string(),
             kind: "Role".to_string(),
-            name: obj_meta.name.clone().ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
+            name: obj_meta
+                .name
+                .clone()
+                .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
         },
         subjects: Some(vec![Subject {
             kind: "ServiceAccount".to_string(),
-            name: obj_meta.name.clone().ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
-            namespace: Some(generator.metadata.namespace.clone().ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?),
+            name: obj_meta
+                .name
+                .clone()
+                .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
+            namespace: Some(current_namespace.to_string()),
             ..Default::default()
         }]),
     };
@@ -86,19 +103,11 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         ..Default::default()
     };
 
-    let role_api = Api::<Role>::namespaced(
-        client.clone(),
-        generator
-            .metadata
-            .namespace
-            .as_ref()
-            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-    );
+    let role_api = Api::<Role>::namespaced(client.clone(), current_namespace);
 
     role_api
         .patch(
-            role
-                .metadata
+            role.metadata
                 .name
                 .as_ref()
                 .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
@@ -108,14 +117,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         .await
         .map_err(Error::HTTPDPodCreationFailed)?;
 
-    let rolebinding_api = Api::<RoleBinding>::namespaced(
-        client.clone(),
-        generator
-            .metadata
-            .namespace
-            .as_ref()
-            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-    );
+    let rolebinding_api = Api::<RoleBinding>::namespaced(client.clone(), current_namespace);
 
     rolebinding_api
         .patch(
@@ -130,14 +132,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         .await
         .map_err(Error::HTTPDPodCreationFailed)?;
 
-    let sa_api = Api::<ServiceAccount>::namespaced(
-        client.clone(),
-        generator
-            .metadata
-            .namespace
-            .as_ref()
-            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-    );
+    let sa_api = Api::<ServiceAccount>::namespaced(client.clone(), current_namespace);
 
     sa_api
         .patch(
@@ -154,6 +149,31 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
 
     let mut volumes = vec![];
     let mut volume_mounts = vec![];
+
+    let label_volume = Volume {
+        name: "ood-label".to_string(),
+        downward_api: Some(DownwardAPIVolumeSource {
+            default_mode: Some(420),
+            items: Some(vec![DownwardAPIVolumeFile {
+                field_ref: Some(ObjectFieldSelector {
+                    api_version: Some("v1".to_string()),
+                    field_path: "metadata.labels['ood-cluster']".to_string(),
+                }),
+                path: "ood-cluster".to_string(),
+                ..Default::default()
+            }]),
+        }),
+        ..Default::default()
+    };
+    volumes.push(label_volume);
+
+    let labels_volume_mount = VolumeMount {
+        mount_path: "/opt/krood/labels".to_string(),
+        name: "ood-label".to_string(),
+        ..Default::default()
+    };
+    volume_mounts.push(labels_volume_mount);
+
     let config_volume = Volume {
         name: "ood-portal".to_string(),
         config_map: Some(ConfigMapVolumeSource {
@@ -181,6 +201,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     };
     volume_mounts.push(config_vol_mount);
 
+
     if generator
         .spec
         .sssd
@@ -205,14 +226,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         volume_mounts.push(sssd_vol_mount);
     }
 
-    let iapps_api = Api::<InteractiveApp>::namespaced(
-        client.clone(),
-        generator
-            .metadata
-            .namespace
-            .as_ref()
-            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-    );
+    let iapps_api = Api::<InteractiveApp>::namespaced(client.clone(), current_namespace);
 
     let lp = ListParams::default().labels(&format!("Hello {}", "1234"));
     let _iapps = iapps_api.list(&lp);
@@ -221,7 +235,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     let pod = Pod {
         metadata: ObjectMeta {
             name: Some(generator.spec.name.clone()),
-            namespace: generator.metadata.namespace.clone(),
+            namespace: Some(current_namespace.to_string()),
             owner_references: Some(vec![oref]),
             labels: Some(labels.clone()),
             ..ObjectMeta::default()
@@ -252,7 +266,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
                 "{}-fep",
                 generator.metadata.name.clone().unwrap_or("ood".to_string())
             )),
-            namespace: generator.metadata.namespace.clone(),
+            namespace: Some(current_namespace.to_string()),
             ..Default::default()
         },
         spec: Some(DeploymentSpec {
@@ -269,14 +283,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         ..Default::default()
     };
 
-    let deploy_api = Api::<Deployment>::namespaced(
-        client.clone(),
-        generator
-            .metadata
-            .namespace
-            .as_ref()
-            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-    );
+    let deploy_api = Api::<Deployment>::namespaced(client.clone(), current_namespace);
 
     deploy_api
         .patch(

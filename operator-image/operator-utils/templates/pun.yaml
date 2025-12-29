@@ -3,6 +3,8 @@ kind: Pun
 metadata:
   name: "$DNS_OOD_USER"
   namespace: "$NAMESPACE"
+  labels:
+    ood-cluster: "$OOD_INSTANCE"
 spec: 
   user: "$OOD_USER"
   httpd:
