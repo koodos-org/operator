@@ -1,19 +1,24 @@
 // Nightly clippy (0.1.64) considers Drop a side effect, see https://github.com/rust-lang/rust-clippy/issues/9608
 #![allow(clippy::unnecessary_lazy_evaluations)]
 
-use crate::crds::Pun;
+use crate::crds::{InteractiveApp, Pun};
 use anyhow::Result;
 use futures::StreamExt;
-use k8s_openapi::api::core::v1::*;
+use k8s_openapi::{
+    api::{
+        apps::v1::{Deployment, DeploymentSpec},
+        core::v1::*,
+    },
+    apimachinery::pkg::apis::meta::v1::LabelSelector,
+};
 use kube::{
     Client, CustomResourceExt,
-    api::{Api, ObjectMeta, Patch, PatchParams, Resource},
+    api::{Api, ListParams, ObjectMeta, Patch, PatchParams, Resource},
     runtime::{
         controller::{Action, Config, Controller},
         watcher,
     },
 };
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::time::Duration;
@@ -35,7 +40,11 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
 
     let oref = generator.controller_owner_ref(&()).unwrap();
 
-    let mut labels = BTreeMap::new();
+    let mut labels = generator
+        .metadata
+        .labels
+        .clone()
+        .ok_or_else(|| Error::MissingObjectKey(".metadata.labels"))?;
 
     labels.insert("ood-component".to_string(), "pun".to_string());
     labels.insert("user".to_string(), generator.spec.user.clone());
@@ -48,11 +57,12 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         .get("ood-cluster")
         .ok_or_else(|| Error::MissingObjectKey(".metadata.labels.ood-cluster"))?;
 
-    let resource_name_base = generator
+    let username = generator
         .metadata
         .name
         .as_ref()
         .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
+
     let current_namespace = generator
         .metadata
         .namespace
@@ -61,7 +71,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
 
     let svc = Service {
         metadata: ObjectMeta {
-            name: Some(format!("nginx-{}", resource_name_base)),
+            name: Some(format!("nginx-{}", username)),
             namespace: Some(current_namespace.to_string()),
             owner_references: Some(vec![oref.clone()]),
             ..Default::default()
@@ -109,6 +119,24 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     volumes.push(config_vol);
 
     let mut volume_mounts = vec![];
+
+    let iapps_api = Api::<InteractiveApp>::namespaced(client.clone(), current_namespace);
+
+    let lp = ListParams::default().labels(&format!("ood-cluster={}", ood_instance_name));
+    let iapps = iapps_api.list(&lp).await.unwrap();
+    for iapp in iapps {
+        let iapp_vol = iapp.spec.source;
+        volumes.push(Volume {
+            image: Some(iapp_vol),
+            name: iapp.spec.name.clone(),
+            ..Default::default()
+        });
+        volume_mounts.push(VolumeMount {
+            name: iapp.spec.name.clone(),
+            mount_path: format!("/var/www/ood/apps/sys/{}", iapp.spec.name),
+            ..Default::default()
+        })
+    }
     // if generator
     //     .spec
     //     .sssd
@@ -146,8 +174,8 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
                 generator.metadata.name.clone().unwrap()
             )),
             namespace: Some(current_namespace.to_string()),
-            labels: Some(labels),
-            owner_references: Some(vec![oref]),
+            labels: Some(labels.clone()),
+            owner_references: Some(vec![oref.clone()]),
             ..ObjectMeta::default()
         },
         spec: Some(PodSpec {
@@ -157,7 +185,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
                 security_context: Some(SecurityContext {
                     ..Default::default()
                 }),
-                name: format!("{}", resource_name_base),
+                name: format!("{}", username),
                 volume_mounts: Some(volume_mounts),
                 command: Some(vec![
                     "/opt/krood/pun_entry.sh".to_string(),
@@ -171,18 +199,40 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         }),
         ..Default::default()
     };
-    let pod_api = Api::<Pod>::namespaced(client.clone(), current_namespace);
+
+    let deployment = Deployment {
+        metadata: ObjectMeta {
+            name: Some(format!("{}-pun", username)),
+            namespace: Some(current_namespace.to_string()),
+            owner_references: Some(vec![oref.clone()]),
+            ..Default::default()
+        },
+        spec: Some(DeploymentSpec {
+            selector: LabelSelector {
+                match_expressions: None,
+                match_labels: Some(labels.clone()),
+            },
+            template: PodTemplateSpec {
+                metadata: Some(pod.metadata),
+                spec: pod.spec,
+            },
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let deployment_api = Api::<Deployment>::namespaced(client.clone(), current_namespace);
 
     let svc_api = Api::<Service>::namespaced(client.clone(), current_namespace);
 
-    pod_api
+    deployment_api
         .patch(
-            pod.metadata
+            deployment
+                .metadata
                 .name
                 .as_ref()
                 .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
             &PatchParams::apply("pun.ondemand.dev"),
-            &Patch::Apply(&pod),
+            &Patch::Apply(&deployment),
         )
         .await
         .map_err(Error::PunPodCreationFailed)?;
@@ -217,14 +267,14 @@ pub async fn controller() -> Result<()> {
 
     // Api clients
     let feps = Api::<Pun>::all(client.clone());
-    let pods = Api::<Pod>::all(client.clone());
+    let deployments = Api::<Deployment>::all(client.clone());
     let svcs = Api::<Service>::all(client.clone());
 
     // limit the controller to running a maximum of two concurrent reconciliations
     let config = Config::default().concurrency(2);
 
     Controller::new(feps, watcher::Config::default())
-        .owns(pods, watcher::Config::default())
+        .owns(deployments, watcher::Config::default())
         .owns(svcs, watcher::Config::default())
         .with_config(config)
         .shutdown_on_signal()

@@ -14,7 +14,7 @@ use k8s_openapi::{
 };
 use kube::{
     Client, CustomResourceExt,
-    api::{Api, ListParams, ObjectMeta, Patch, PatchParams, PostParams, Resource},
+    api::{Api, ObjectMeta, Patch, PatchParams, Resource},
     runtime::{
         controller::{Action, Config, Controller},
         watcher,
@@ -201,7 +201,6 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     };
     volume_mounts.push(config_vol_mount);
 
-
     if generator
         .spec
         .sssd
@@ -226,17 +225,12 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         volume_mounts.push(sssd_vol_mount);
     }
 
-    let iapps_api = Api::<InteractiveApp>::namespaced(client.clone(), current_namespace);
-
-    let lp = ListParams::default().labels(&format!("Hello {}", "1234"));
-    let _iapps = iapps_api.list(&lp);
-
     // Pod creation
     let pod = Pod {
         metadata: ObjectMeta {
             name: Some(generator.spec.name.clone()),
             namespace: Some(current_namespace.to_string()),
-            owner_references: Some(vec![oref]),
+            owner_references: Some(vec![oref.clone()]),
             labels: Some(labels.clone()),
             ..ObjectMeta::default()
         },
@@ -267,6 +261,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
                 generator.metadata.name.clone().unwrap_or("ood".to_string())
             )),
             namespace: Some(current_namespace.to_string()),
+            owner_references: Some(vec![oref.clone()]),
             ..Default::default()
         },
         spec: Some(DeploymentSpec {
