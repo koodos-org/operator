@@ -15,4 +15,5 @@ COPY pod_proxy.lua /opt/ood/mod_ood_proxy/lib/pun_proxy.lua
 COPY pun.conf.erb /opt/ood/nginx_stage/templates/pun.conf.erb
 COPY operator-utils /opt/krood/utils
 COPY entrypoint.sh /opt/krood/entrypoint.sh
+COPY pun_entry.sh /opt/krood/pun_entry.sh
 CMD ["sh", "/opt/krood/entrypoint.sh"]
