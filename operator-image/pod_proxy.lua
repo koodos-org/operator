@@ -51,17 +51,19 @@ function pun_proxy_handler(r)
   local conn = {}
   conn.user = user
   local dns_user = user:gsub("%.","-")
-  conn.server = "nginx-" .. dns_user .. ":443"
+  local ood_name = os.getenv("KROOD_OOD_NAME")
+  local pun_dns_name = ood_name .. "-nginx-" .. dns_user
+  conn.server = pun_dns_name .. ":443"
   conn.uri = r.uri
 
   -- start up PUN if socket doesn't exist
   local count = 0
   local app_init_url = r.is_https and "https://" or "http://"
   app_init_url = app_init_url .. r.hostname .. ":" .. r.port .. nginx_uri .. "/init?redir=$http_x_forwarded_escaped_uri"
-  local ok = is_pod_listening("nginx-" .. dns_user,443)
+  local ok = is_pod_listening(pun_dns_name,443)
   if not ok then
         nginx_stage.pun(r, pun_stage_cmd, user, app_init_url, pun_pre_hook_exports, pun_pre_hook_root_cmd, allowed_hosts)
-        while not is_pod_listening("nginx-" .. user,443) and count < pun_max_retries do
+        while not is_pod_listening(pun_dns_name,443) and count < pun_max_retries do
             r.usleep(150000)
             count = count + 1
         end
