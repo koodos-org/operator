@@ -52,7 +52,7 @@ function pun_proxy_handler(r)
   conn.user = user
   local dns_user = user:gsub("%.","-")
   local ood_name = os.getenv("KROOD_OOD_NAME")
-  local pun_dns_name = ood_name .. "-nginx-" .. dns_user
+  local pun_dns_name = "nginx-" .. ood_name .. dns_user
   conn.server = pun_dns_name .. ":443"
   conn.uri = r.uri
 
