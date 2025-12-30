@@ -30,6 +30,8 @@ jobs:
           context: ./operator-image
           file: ./operator-image/Containerfile
           push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ghcr.io/${{ github.repository_owner }}/operator-image:latest
             ghcr.io/${{ github.repository_owner }}/operator-image:${{ github.sha }}
@@ -40,6 +42,8 @@ jobs:
           context: ./
           file: ./Containerfile
           push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ghcr.io/${{ github.repository_owner }}/koodos-operator:latest
             ghcr.io/${{ github.repository_owner }}/koodos-operator:${{ github.sha }}
