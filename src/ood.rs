@@ -1,11 +1,9 @@
 // Nightly clippy (0.1.64) considers Drop a side effect, see https://github.com/rust-lang/rust-clippy/issues/9608
 #![allow(clippy::unnecessary_lazy_evaluations)]
-use crate::crds::{FrontEndProxy, FrontEndProxySpec, HTTPDObj, OpenOnDemand, OpenOnDemandStatus};
+use crate::crds::{FrontEndProxy, FrontEndProxySpec, OpenOnDemand, OpenOnDemandStatus};
 use anyhow::Result;
 use futures::StreamExt;
-use k8s_openapi::api::apps::v1::{DaemonSet, DaemonSetSpec};
 use k8s_openapi::api::core::v1::*;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::*;
 use kube::{
     Client, CustomResourceExt,
     api::{Api, ObjectMeta, Patch, PatchParams, Resource},
@@ -51,7 +49,7 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
     let client = &ctx.client;
     let oref = generator.controller_owner_ref(&()).unwrap();
 
-    let cluster_name = generator.metadata.name.clone().unwrap();
+    let ood_instance_name = generator.metadata.name.clone().unwrap();
     // Base configs to make the custom proxy and stage logic work in the container
     let mut krood_portal_config =
         serde_yaml::from_str(include_str!("../assets/ood_portal.yml")).unwrap();
@@ -60,7 +58,7 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
 
     let mut labels = BTreeMap::new();
     labels.insert("app".to_string(), "ood".to_string());
-    labels.insert("ood-cluster".to_string(), cluster_name.clone());
+    labels.insert("ood-cluster".to_string(), ood_instance_name.clone());
 
     let mut config_files = BTreeMap::new();
     let site_portal_config =
@@ -82,7 +80,7 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
     );
     let svc = Service {
         metadata: ObjectMeta {
-            name: Some(cluster_name.clone()),
+            name: Some(ood_instance_name.clone()),
             namespace: generator.metadata.namespace.clone(),
             owner_references: Some(vec![oref.clone()]),
             ..Default::default()
@@ -101,7 +99,7 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
 
     let ood_cm = ConfigMap {
         metadata: ObjectMeta {
-            name: Some(format!("{}-ood-config-files", cluster_name.clone())),
+            name: Some(format!("{}-ood-config-files", ood_instance_name.clone())),
             owner_references: Some(vec![oref.clone()]),
             ..Default::default()
         },
@@ -109,35 +107,12 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
         ..Default::default()
     };
 
-    let mut sssd_config = None;
-    if generator
-        .spec
-        .sssd
-        .clone()
-        .map(|obj| obj.enabled)
-        .unwrap_or(false)
-    {
-        let mut inner_config = BTreeMap::new();
-        inner_config.insert(
-            "sssd.conf".to_string(),
-            generator.spec.sssd.clone().unwrap().config,
-        );
-        sssd_config = Some(inner_config);
-    }
-
-    let sssd_cm = ConfigMap {
-        metadata: ObjectMeta {
-            name: Some(format!("{}-sssd-config-file", cluster_name.clone())),
-            owner_references: Some(vec![oref.clone()]),
-            ..Default::default()
-        },
-        data: sssd_config,
-        ..Default::default()
-    };
-
     let clusters_cm = ConfigMap {
         metadata: ObjectMeta {
-            name: Some(format!("{}-ood-cluster-config-files", cluster_name.clone())),
+            name: Some(format!(
+                "{}-ood-cluster-config-files",
+                ood_instance_name.clone()
+            )),
             labels: Some(labels.clone()),
             owner_references: Some(vec![oref.clone()]),
             ..Default::default()
@@ -156,114 +131,12 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
         },
         spec: FrontEndProxySpec {
             name: "httpd".to_string(),
-            sssd: generator.spec.sssd.clone(),
-            httpd: HTTPDObj {
-                image: generator.spec.httpd.image.clone(),
-                extra_volume_mount: None,
-                extra_volumes: None,
-            },
+            pun_class_ref: generator.spec.pun_class_ref.clone(),
+            ood_instance_ref: generator.object_ref(&()),
+            httpd: generator.spec.httpd.clone(),
         },
     };
 
-    // TODO: Refactor out
-    if generator
-        .spec
-        .sssd
-        .clone()
-        .map(|obj| obj.enabled)
-        .unwrap_or(false)
-    {
-        let mut ds_label = BTreeMap::new();
-        ds_label.insert("ood-component".to_string(), "sssd".to_string());
-        let sssd_ds = DaemonSet {
-            metadata: ObjectMeta {
-                name: Some(format!("{}-sssd", cluster_name.clone())),
-                labels: Some(ds_label.clone()),
-                owner_references: Some(vec![oref.clone()]),
-                ..Default::default()
-            },
-            spec: Some(DaemonSetSpec {
-                selector: LabelSelector {
-                    match_labels: Some(ds_label.clone()),
-                    ..Default::default()
-                },
-                template: PodTemplateSpec {
-                    metadata: Some(ObjectMeta {
-                        labels: Some(ds_label.clone()),
-                        ..Default::default()
-                    }),
-                    spec: Some(PodSpec {
-                        security_context: Some(PodSecurityContext {
-                            run_as_user: Some(0),
-                            ..Default::default()
-                        }),
-                        containers: vec![Container {
-                            name: "sssd".to_string(),
-                            image: Some(generator.spec.sssd.clone().unwrap().image),
-                            volume_mounts: Some(vec![
-                                VolumeMount {
-                                    mount_path: "/var/lib/sss/pipes".to_string(),
-                                    name: "sssd-pipes".to_string(),
-                                    ..Default::default()
-                                },
-                                VolumeMount {
-                                    mount_path: "/etc/sssd/sssd.conf".to_string(),
-                                    name: "sssd-config".to_string(),
-                                    sub_path: Some("sssd.conf".to_string()),
-                                    ..Default::default()
-                                },
-                            ]),
-                            ..Default::default()
-                        }],
-                        volumes: Some(vec![
-                            Volume {
-                                name: "sssd-config".to_string(),
-                                config_map: Some(ConfigMapVolumeSource {
-                                    name: format!("{}-sssd-config-file", cluster_name.clone()),
-                                    items: Some(vec![KeyToPath {
-                                        key: "sssd.conf".to_string(),
-                                        path: "sssd.conf".to_string(),
-                                        mode: Some(0o0600),
-                                    }]),
-                                    ..Default::default()
-                                }),
-                                ..Default::default()
-                            },
-                            Volume {
-                                name: "sssd-pipes".to_string(),
-                                host_path: Some(HostPathVolumeSource {
-                                    path: "/var/run/sssd-pipes".to_string(),
-                                    type_: Some("DirectoryOrCreate".to_string()),
-                                }),
-                                ..Default::default()
-                            },
-                        ]),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        let ds_api = Api::<DaemonSet>::namespaced(
-            client.clone(),
-            generator
-                .metadata
-                .namespace
-                .as_ref()
-                .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-        );
-        ds_api
-            .patch(
-                sssd_ds.metadata.name.as_ref().unwrap(),
-                &PatchParams::apply("frontendproxies.ondemand.dev"),
-                &Patch::Apply(&sssd_ds),
-            )
-            .await
-            .map_err(Error::SvcCreationFailed)?;
-    }
     // Getting Kubernetes API clients for needed resources
     let svc_api = Api::<Service>::namespaced(
         client.clone(),
@@ -312,14 +185,6 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
             clusters_cm.metadata.name.as_ref().unwrap(),
             &PatchParams::apply("openondemands.ondemand.dev"),
             &Patch::Apply(&clusters_cm),
-        )
-        .await
-        .unwrap();
-    cm_api
-        .patch(
-            sssd_cm.metadata.name.as_ref().unwrap(),
-            &PatchParams::apply("openondemands.ondemand.dev"),
-            &Patch::Apply(&sssd_cm),
         )
         .await
         .unwrap();
@@ -381,7 +246,6 @@ pub async fn controller() -> Result<()> {
     let oods = Api::<OpenOnDemand>::all(client.clone());
     let cms = Api::<ConfigMap>::all(client.clone());
     let svcs = Api::<Service>::all(client.clone());
-    let dss = Api::<DaemonSet>::all(client.clone());
 
     // limit the controller to running a maximum of two concurrent reconciliations
     let config = Config::default().concurrency(2);
@@ -399,17 +263,6 @@ pub async fn controller() -> Result<()> {
             }
         })
         .watches(svcs, watcher::Config::default(), |ar| {
-            if let Some(labels) = ar.metadata.labels {
-                if let Some(app_label) = labels.get("ood-cluster") {
-                    Some(ObjectRef::new(app_label).within(&ar.metadata.namespace.unwrap()))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .watches(dss, watcher::Config::default(), |ar| {
             if let Some(labels) = ar.metadata.labels {
                 if let Some(app_label) = labels.get("ood-cluster") {
                     Some(ObjectRef::new(app_label).within(&ar.metadata.namespace.unwrap()))

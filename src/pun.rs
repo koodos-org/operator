@@ -1,7 +1,7 @@
 // Nightly clippy (0.1.64) considers Drop a side effect, see https://github.com/rust-lang/rust-clippy/issues/9608
 #![allow(clippy::unnecessary_lazy_evaluations)]
 
-use crate::crds::{InteractiveApp, Pun};
+use crate::crds::{InteractiveApp, Pun, PunClass};
 use anyhow::Result;
 use futures::StreamExt;
 use k8s_openapi::{
@@ -19,7 +19,7 @@ use kube::{
         watcher,
     },
 };
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 use thiserror::Error;
 use tokio::time::Duration;
 use tracing::*;
@@ -32,6 +32,8 @@ enum Error {
     MissingObjectKey(&'static str),
     #[error("Failed to create Service: {0}")]
     SvcCreationFailed(#[source] kube::Error),
+    #[error("Failed to find PunClass: {0}")]
+    PunClassNotFound(#[source] kube::Error),
 }
 
 /// Controller triggers this whenever our main object or our children changed
@@ -44,18 +46,17 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         .metadata
         .labels
         .clone()
-        .ok_or_else(|| Error::MissingObjectKey(".metadata.labels"))?;
+        .unwrap_or_else(|| BTreeMap::new());
 
     labels.insert("ood-component".to_string(), "pun".to_string());
     labels.insert("user".to_string(), generator.spec.user.clone());
 
     let ood_instance_name = generator
-        .metadata
-        .labels
+        .spec
+        .ood_instance_ref
+        .name
         .as_ref()
-        .ok_or_else(|| Error::MissingObjectKey(".metadata.labels"))?
-        .get("ood-cluster")
-        .ok_or_else(|| Error::MissingObjectKey(".metadata.labels.ood-cluster"))?;
+        .ok_or_else(|| Error::MissingObjectKey(".spec.ood_instance_ref.name"))?;
 
     let username = generator
         .metadata
@@ -87,27 +88,25 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         }),
         ..Default::default()
     };
+    let punclass_api = Api::<PunClass>::all(client.clone());
 
-    let mut volumes = vec![];
+    let punclass = punclass_api
+        .get(
+            &generator
+                .spec
+                .pun_class_ref
+                .name
+                .clone()
+                .ok_or_else(|| Error::MissingObjectKey(".spec.pun_class_ref.name"))?,
+        )
+        .await
+        .map_err(Error::PunClassNotFound)?;
 
-    // let nfs_vol = Volume {
-    //     name: "home-nfs".to_string(),
-    //     persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
-    //         claim_name: "pvc-nfs-static".to_string(),
-    //         ..Default::default()
-    //     }),
-    //     ..Default::default()
-    // };
-    // volumes.push(nfs_vol);
-    // let sssd_vol = Volume {
-    //     name: "sssd-host-pipe".to_string(),
-    //     host_path: Some(HostPathVolumeSource {
-    //         path: "/var/run/sssd-pipes".to_string(),
-    //         type_: Some("Directory".to_string()),
-    //     }),
-    //
-    //     ..Default::default()
-    // };
+    let image = punclass.spec.httpd.image;
+
+    let mut volumes = punclass.spec.httpd.extra_volumes.unwrap_or(vec![]);
+    let mut volume_mounts = punclass.spec.httpd.extra_volume_mounts.unwrap_or(vec![]);
+
     let config_vol = Volume {
         name: "clusters-d".to_string(),
         config_map: Some(ConfigMapVolumeSource {
@@ -117,8 +116,6 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         ..Default::default()
     };
     volumes.push(config_vol);
-
-    let mut volume_mounts = vec![];
 
     let iapps_api = Api::<InteractiveApp>::namespaced(client.clone(), current_namespace);
 
@@ -137,22 +134,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
             ..Default::default()
         })
     }
-    // if generator
-    //     .spec
-    //     .sssd
-    //     .clone()
-    //     .map(|obj| obj.enabled)
-    //     .unwrap_or(false)
-    // {
-    //     volumes.push(sssd_vol);
-    //     let sssd_vol_mount = VolumeMount {
-    //         name: "sssd-host-pipe".to_string(),
-    //         mount_path: "/var/lib/sss/pipes".to_string(),
-    //         ..Default::default()
-    //     };
-    //     volume_mounts.push(sssd_vol_mount);
-    // }
-    //
+
     let cluster_volume_mount = VolumeMount {
         mount_path: "/etc/ood/config/clusters.d".to_string(),
         name: "clusters-d".to_string(),
@@ -160,13 +142,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     };
 
     volume_mounts.push(cluster_volume_mount);
-    // let nfs_vol_mount = VolumeMount {
-    //     mount_path: "/home".to_string(),
-    //     name: "home-nfs".to_string(),
-    //     ..Default::default()
-    // };
-    // volume_mounts.push(nfs_vol_mount);
-    // Pod creation
+
     let pod = Pod {
         metadata: ObjectMeta {
             name: Some(format!(
@@ -180,7 +156,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         },
         spec: Some(PodSpec {
             containers: vec![Container {
-                image: Some(generator.spec.httpd.image.clone()),
+                image: Some(image),
                 image_pull_policy: Some("Always".to_string()),
                 security_context: Some(SecurityContext {
                     ..Default::default()
@@ -291,5 +267,7 @@ pub async fn controller() -> Result<()> {
 }
 
 pub fn crd() -> String {
-    serde_yaml::to_string(&Pun::crd()).unwrap()
+    let pun_class = serde_yaml::to_string(&PunClass::crd()).unwrap();
+    let pun = serde_yaml::to_string(&Pun::crd()).unwrap();
+    format!("{pun}\n---\n{pun_class}")
 }

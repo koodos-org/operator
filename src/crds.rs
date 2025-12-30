@@ -1,5 +1,5 @@
 use k8s_openapi::{
-    api::core::v1::{ImageVolumeSource, Volume, VolumeMount},
+    api::core::v1::{ImageVolumeSource, ObjectReference, Volume, VolumeMount},
     apimachinery::pkg::apis::meta::v1::Condition,
 };
 use kube_derive::CustomResource;
@@ -12,31 +12,31 @@ use std::collections::BTreeMap;
 #[kube(shortname = "pun", namespaced)]
 pub struct PunSpec {
     pub user: String,
-    pub httpd: HTTPDObj,
-    pub sssd: Option<SssdObj>,
+    pub pun_class_ref: ObjectReference,
+    pub ood_instance_ref: ObjectReference,
 }
 
+#[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[kube(group = "ondemand.dev", version = "v1", kind = "PunClass")]
+#[kube(shortname = "punclass")]
+pub struct PunClassSpec {
+    pub httpd: HTTPDObj,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct HTTPDObj {
+    pub image: String,
+    pub extra_volume_mounts: Option<Vec<VolumeMount>>,
+    pub extra_volumes: Option<Vec<Volume>>,
+}
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[kube(group = "ondemand.dev", version = "v1", kind = "FrontEndProxy")]
 #[kube(shortname = "fep", namespaced)]
 pub struct FrontEndProxySpec {
     pub name: String,
     pub httpd: HTTPDObj,
-    pub sssd: Option<SssdObj>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-pub struct SssdObj {
-    pub enabled: bool,
-    pub image: String,
-    pub config: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-pub struct HTTPDObj {
-    pub image: String,
-    pub extra_volume_mount: Option<Vec<VolumeMount>>,
-    pub extra_volumes: Option<Vec<Volume>>,
+    pub pun_class_ref: Option<ObjectReference>,
+    pub ood_instance_ref: ObjectReference,
 }
 
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -54,8 +54,10 @@ pub struct OpenOnDemandSpec {
     pub nginx_stage_yml: String,
     #[serde(rename = "clusters.d")]
     pub clusters: BTreeMap<String, String>,
+    /// Container spec parameters for FEP level pods
     pub httpd: HTTPDObj,
-    pub sssd: Option<SssdObj>,
+    /// Container spec parameters for PUN level pods
+    pub pun_class_ref: Option<ObjectReference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]

@@ -20,7 +20,7 @@ use kube::{
         watcher,
     },
 };
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 use thiserror::Error;
 use tokio::time::Duration;
 use tracing::*;
@@ -40,6 +40,14 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     let oref = generator.controller_owner_ref(&()).unwrap();
 
     let labels = generator.metadata.labels.clone().unwrap();
+
+    let ood_instance_name = generator
+        .spec
+        .ood_instance_ref
+        .name
+        .as_ref()
+        .ok_or_else(|| Error::MissingObjectKey(".spec.ood_instance_ref.name"))?;
+
     let current_namespace = generator
         .metadata
         .namespace
@@ -132,6 +140,36 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         .await
         .map_err(Error::HTTPDPodCreationFailed)?;
 
+    let cm_api = Api::<ConfigMap>::namespaced(client.clone(), &current_namespace);
+
+    let mut cm_data = BTreeMap::new();
+    cm_data.insert("pun.yaml".to_string(), format!("apiVersion: ondemand.dev/v1\nkind: Pun\nmetadata:\n  name: \"$DNS_OOD_USER\"\n  namespace: \"$NAMESPACE\"\nspec:\n  user: \"$OOD_USER\"\n  pun_class_ref:\n    name: {}\n  ood_instance_ref:\n    name: {ood_instance_name}\n    namespace: {current_namespace}",generator.spec.pun_class_ref.clone().unwrap().name.clone().unwrap()));
+    let template_cm = ConfigMap {
+        metadata: ObjectMeta {
+            name: Some(format!(
+                "pun-{}-class-template",
+                generator.spec.pun_class_ref.clone().unwrap().name.unwrap()
+            )),
+            owner_references: Some(vec![oref.clone()]),
+            ..Default::default()
+        },
+        data: Some(cm_data),
+        ..Default::default()
+    };
+
+    cm_api
+        .patch(
+            template_cm
+                .metadata
+                .name
+                .as_ref()
+                .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
+            &PatchParams::apply("deployments"),
+            &Patch::Apply(&template_cm),
+        )
+        .await
+        .map_err(Error::HTTPDPodCreationFailed)?;
+
     let sa_api = Api::<ServiceAccount>::namespaced(client.clone(), current_namespace);
 
     sa_api
@@ -150,29 +188,27 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     let mut volumes = vec![];
     let mut volume_mounts = vec![];
 
-    let label_volume = Volume {
-        name: "ood-label".to_string(),
-        downward_api: Some(DownwardAPIVolumeSource {
-            default_mode: Some(420),
-            items: Some(vec![DownwardAPIVolumeFile {
-                field_ref: Some(ObjectFieldSelector {
-                    api_version: Some("v1".to_string()),
-                    field_path: "metadata.labels['ood-cluster']".to_string(),
-                }),
-                path: "ood-cluster".to_string(),
-                ..Default::default()
-            }]),
+    let template_cm_vol = Volume {
+        config_map: Some(ConfigMapVolumeSource {
+            name: format!(
+                "pun-{}-class-template",
+                generator.spec.pun_class_ref.clone().unwrap().name.unwrap()
+            ),
+            ..Default::default()
         }),
+        name: "pun-template".to_string(),
         ..Default::default()
     };
-    volumes.push(label_volume);
 
-    let labels_volume_mount = VolumeMount {
-        mount_path: "/opt/krood/labels".to_string(),
-        name: "ood-label".to_string(),
+    volumes.push(template_cm_vol);
+
+    let template_cm_vol_mount = VolumeMount {
+        mount_path: "/opt/krood/utils/templates".to_string(),
+        name: "pun-template".to_string(),
         ..Default::default()
     };
-    volume_mounts.push(labels_volume_mount);
+
+    volume_mounts.push(template_cm_vol_mount);
 
     let config_volume = Volume {
         name: "ood-portal".to_string(),
@@ -200,30 +236,6 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         ..Default::default()
     };
     volume_mounts.push(config_vol_mount);
-
-    if generator
-        .spec
-        .sssd
-        .clone()
-        .map(|obj| obj.enabled)
-        .unwrap_or(false)
-    {
-        let sssd_volume = Volume {
-            name: "sssd-host-pipe".to_string(),
-            host_path: Some(HostPathVolumeSource {
-                path: "/var/run/sssd-pipes".to_string(),
-                type_: Some("Directory".to_string()),
-            }),
-            ..Default::default()
-        };
-        let sssd_vol_mount = VolumeMount {
-            name: "sssd-host-pipe".to_string(),
-            mount_path: "/var/lib/sss/pipes".to_string(),
-            ..Default::default()
-        };
-        volumes.push(sssd_volume);
-        volume_mounts.push(sssd_vol_mount);
-    }
 
     // Pod creation
     let pod = Pod {
@@ -307,10 +319,6 @@ struct Data {
 }
 
 pub async fn controller() -> Result<()> {
-    //let crd = serde_yaml::to_string(&FrontEndProxy::crd()).unwrap();
-    //println!("{}",crd);
-
-    //
     let client = Client::try_default().await?;
 
     // Api clients
