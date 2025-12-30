@@ -39,7 +39,8 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
 
     let oref = generator.controller_owner_ref(&()).unwrap();
 
-    let labels = generator.metadata.labels.clone().unwrap();
+    let labels = generator.metadata.labels.clone()
+        .ok_or_else(|| Error::MissingObjectKey(".metadata.labels"))?;
 
     let ood_instance_name = generator
         .spec
@@ -143,12 +144,13 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     let cm_api = Api::<ConfigMap>::namespaced(client.clone(), &current_namespace);
 
     let mut cm_data = BTreeMap::new();
-    cm_data.insert("pun.yaml".to_string(), format!("apiVersion: ondemand.dev/v1\nkind: Pun\nmetadata:\n  name: \"$DNS_OOD_USER\"\n  namespace: \"$NAMESPACE\"\nspec:\n  user: \"$OOD_USER\"\n  pun_class_ref:\n    name: {}\n  ood_instance_ref:\n    name: {ood_instance_name}\n    namespace: {current_namespace}",generator.spec.pun_class_ref.clone().unwrap().name.clone().unwrap()));
+    cm_data.insert("pun.yaml".to_string(), format!("apiVersion: ondemand.dev/v1\nkind: Pun\nmetadata:\n  name: \"{ood_instance_name}-$DNS_OOD_USER\"\n  namespace: \"$NAMESPACE\"\nspec:\n  user: \"$OOD_USER\"\n  pun_class_ref:\n    name: {}\n  ood_instance_ref:\n    name: {ood_instance_name}\n    namespace: {current_namespace}",generator.spec.pun_class_ref.clone().unwrap().name.clone().unwrap()));
     let template_cm = ConfigMap {
         metadata: ObjectMeta {
             name: Some(format!(
-                "pun-{}-class-template",
-                generator.spec.pun_class_ref.clone().unwrap().name.unwrap()
+                "pun-{}-{}-class-template",
+                generator.spec.pun_class_ref.clone().unwrap().name.unwrap(),
+                ood_instance_name
             )),
             owner_references: Some(vec![oref.clone()]),
             ..Default::default()
@@ -191,8 +193,9 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     let template_cm_vol = Volume {
         config_map: Some(ConfigMapVolumeSource {
             name: format!(
-                "pun-{}-class-template",
-                generator.spec.pun_class_ref.clone().unwrap().name.unwrap()
+                "pun-{}-{}-class-template",
+                generator.spec.pun_class_ref.clone().unwrap().name.unwrap(),
+                ood_instance_name
             ),
             ..Default::default()
         }),
@@ -250,8 +253,8 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
             service_account_name: Some("fep-cluster".to_string()),
             containers: vec![Container {
                 env: Some(vec![EnvVar {
-                    name: "KOODO_IMAGE".to_string(),
-                    value: Some(generator.spec.httpd.image.clone()),
+                    name: "KROOD_OOD_NAME".to_string(),
+                    value: Some(ood_instance_name.to_string()),
                     value_from: None,
                 }]),
                 image: Some(generator.spec.httpd.image.clone()),
@@ -328,7 +331,7 @@ pub async fn controller() -> Result<()> {
     let iapps = Api::<InteractiveApp>::all(client.clone());
 
     // limit the controller to running a maximum of two concurrent reconciliations
-    let config = Config::default().concurrency(2);
+    let config = Config::default().concurrency(1);
 
     Controller::new(feps, watcher::Config::default())
         .owns(deployments, watcher::Config::default())

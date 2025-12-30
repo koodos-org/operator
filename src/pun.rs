@@ -58,7 +58,8 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         .as_ref()
         .ok_or_else(|| Error::MissingObjectKey(".spec.ood_instance_ref.name"))?;
 
-    let username = generator
+    // {ood_instance_name}-{username.replace('.', '-')}
+    let dns_username = generator
         .metadata
         .name
         .as_ref()
@@ -72,7 +73,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
 
     let svc = Service {
         metadata: ObjectMeta {
-            name: Some(format!("nginx-{}", username)),
+            name: Some(format!("nginx-{dns_username}")),
             namespace: Some(current_namespace.to_string()),
             owner_references: Some(vec![oref.clone()]),
             ..Default::default()
@@ -146,7 +147,8 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     let pod = Pod {
         metadata: ObjectMeta {
             name: Some(format!(
-                "nginx-{}",
+                "{}-nginx-{}",
+                ood_instance_name,
                 generator.metadata.name.clone().unwrap()
             )),
             namespace: Some(current_namespace.to_string()),
@@ -161,7 +163,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
                 security_context: Some(SecurityContext {
                     ..Default::default()
                 }),
-                name: format!("{}", username),
+                name: format!("{dns_username}"),
                 volume_mounts: Some(volume_mounts),
                 command: Some(vec![
                     "/opt/krood/pun_entry.sh".to_string(),
@@ -178,7 +180,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
 
     let deployment = Deployment {
         metadata: ObjectMeta {
-            name: Some(format!("{}-pun", username)),
+            name: Some(format!("{dns_username}-pun")),
             namespace: Some(current_namespace.to_string()),
             owner_references: Some(vec![oref.clone()]),
             ..Default::default()
