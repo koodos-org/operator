@@ -8,7 +8,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[kube(group = "ondemand.dev", version = "v1", kind = "Pun")]
+#[kube(
+    group = "ondemand.dev",
+    version = "v1",
+    kind = "Pun",
+    status = PunStatus
+)]
 #[kube(shortname = "pun", namespaced)]
 pub struct PunSpec {
     pub user: String,
@@ -16,6 +21,10 @@ pub struct PunSpec {
     pub ood_instance_ref: ObjectReference,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct PunStatus {
+    pub conditions: Vec<Condition>,
+}
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[kube(group = "ondemand.dev", version = "v1", kind = "PunClass")]
 #[kube(shortname = "punclass")]
