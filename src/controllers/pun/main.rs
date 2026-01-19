@@ -4,13 +4,10 @@
 use super::types::Error;
 use crate::crds::{InteractiveApp, Pun, PunClass};
 use crate::pun::generator;
+use crate::utils::status::PUNConditions;
 use anyhow::Result;
-use chrono::Utc;
 use futures::StreamExt;
-use k8s_openapi::{
-    api::{apps::v1::Deployment, core::v1::*},
-    apimachinery::pkg::apis::meta::v1::{Condition, Time},
-};
+use k8s_openapi::api::{apps::v1::Deployment, core::v1::*};
 use kube::{
     Client,
     api::{Api, ListParams, Patch, PatchParams},
@@ -24,6 +21,7 @@ use tokio::time::Duration;
 use tracing::*;
 
 /// Controller triggers this whenever our main object or our children changed
+#[instrument(skip_all, fields(resource_name = generator.metadata.name, resource_type = "PUN"))]
 async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error> {
     // Initial setup
     let client = &ctx.client;
@@ -32,6 +30,8 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         .namespace
         .as_ref()
         .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?;
+
+    let mut conditions = PUNConditions::new();
 
     let deployment_api = Api::<Deployment>::namespaced(client.clone(), current_namespace);
 
@@ -76,6 +76,11 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     // TODO: PUN observed gen handling
 
     // Generate desired world
+    let pun_name = generator
+        .metadata
+        .name
+        .as_ref()
+        .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
 
     let svc = generator::generate_svc(&generator, labels.clone())?;
 
@@ -85,30 +90,24 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     let deployment =
         generator::build_deployment(&generator, &punclass, labels, volumes, volume_mounts)?;
 
+    let deployment_name = deployment
+        .metadata
+        .name
+        .as_ref()
+        .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
     // Get current status
     let current_deployment = deployment_api
-        .get_opt(
-            &deployment
-                .metadata
-                .name
-                .as_ref()
-                .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
-        )
+        .get_opt(&deployment_name)
         .await
         // Should be an API error, not a not found
         .map_err(Error::PunClassNotFound)?;
 
-    let current_dep_gen = current_deployment.and_then(|dep| dep.metadata.generation);
+    let current_deploy_gen = current_deployment.and_then(|dep| dep.metadata.generation);
 
     // Update World to match desired state
-
     let new_deployment = deployment_api
         .patch(
-            deployment
-                .metadata
-                .name
-                .as_ref()
-                .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
+            deployment_name,
             &PatchParams::apply("pun.ondemand.dev"),
             &Patch::Apply(&deployment),
         )
@@ -128,81 +127,52 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
 
     let pun_api = Api::<Pun>::namespaced(client.clone(), current_namespace);
 
-    let status_patch = |conditions| {
-        serde_json::json!({
-                "status": {
-                    "conditions": vec![conditions]
+    // 6 Check status points for conditions
+    let conditions = 'cond_check: {
+        // If deployment spec was updated we have to wait for an new event to trust deployment status
+        if current_deploy_gen != new_deployment.metadata.generation {
+            info!("Deployment updated");
+            conditions.deployment(
+                generator.metadata.generation,
+                "Deployment has been updated and is progressing".to_string(),
+                "False".to_string(),
+            );
+            break 'cond_check conditions;
         }
-        })
+
+        let ready_pods = new_deployment
+            .status
+            .and_then(|status| status.ready_replicas);
+
+        // If spec is current and pods are ready
+        if ready_pods == Some(1) {
+            info!("Deployment is ready; PUN is ready");
+            conditions.deployment(
+                generator.metadata.generation,
+                "Deployment has ready pod".to_string(),
+                "True".to_string(),
+            );
+            conditions.ready(
+                generator.metadata.generation,
+                "Deployment ready, PUN ready".to_string(),
+                "True".to_string(),
+            );
+        }
+        conditions
     };
-    // 6 Check for generation change
 
-    // Set as progressing: (spec change) if old_gen != new_gen
-    if current_dep_gen != new_deployment.metadata.generation {
-        warn!("Setting status: gen mismatch");
-        let progressing_cond = Condition {
-            status: "False".to_string(),
-            type_: "DeploymentProgressing".to_string(),
-            last_transition_time: Time(Utc::now()),
-            message: format!("Deployment has been updated, waiting"),
-            observed_generation: generator.metadata.generation,
-            reason: format!("DeploymentUpdated"),
-        };
-        pun_api
-            .patch_status(
-                generator
-                    .metadata
-                    .name
-                    .as_ref()
-                    .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
-                &PatchParams::default(),
-                &Patch::Merge(status_patch(progressing_cond)),
-            )
-            .await
-            .map_err(Error::SvcCreationFailed)?;
-
-        return Ok(Action::requeue(Duration::from_secs(300)));
-    }
-
-    // Check for number of ready pods if this matches desired state, set condition to available
-    let ready_pods = new_deployment
-        .status
-        .and_then(|status| status.ready_replicas);
-
-    if ready_pods == Some(1) {
-        warn!("Setting status: Ready");
-        let available_cond = Condition {
-            status: "True".to_string(),
-            type_: "Available".to_string(),
-            last_transition_time: Time(Utc::now()),
-            message: format!("PUN is available"),
-            observed_generation: generator.metadata.generation,
-            reason: format!("DeploymentReady"),
-        };
-        pun_api
-            .patch_status(
-                generator
-                    .metadata
-                    .name
-                    .as_ref()
-                    .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
-                &PatchParams::default(),
-                &Patch::Merge(status_patch(available_cond)),
-            )
-            .await
-            .map_err(Error::SvcCreationFailed)?;
-
-        return Ok(Action::requeue(Duration::from_secs(300)));
-    }
+    let status = conditions.get_patch();
+    pun_api
+        .patch_status(pun_name, &PatchParams::default(), &Patch::Merge(status))
+        .await
+        .map_err(Error::SvcCreationFailed)?;
     Ok(Action::requeue(Duration::from_secs(300)))
 }
 
-/// The controller triggers this on reconcile errors
 fn error_policy(_object: Arc<Pun>, _error: &Error, _ctx: Arc<Data>) -> Action {
     Action::requeue(Duration::from_secs(1))
 }
 
-// Data we want access to in error/reconcile calls
 struct Data {
     client: Client,
 }
