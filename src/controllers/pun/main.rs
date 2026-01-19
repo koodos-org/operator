@@ -1,127 +1,27 @@
 // Nightly clippy (0.1.64) considers Drop a side effect, see https://github.com/rust-lang/rust-clippy/issues/9608
 #![allow(clippy::unnecessary_lazy_evaluations)]
 
-use crate::crds::{InteractiveApp, Pun, PunClass, PunStatus};
+use super::types::Error;
+use crate::crds::{InteractiveApp, Pun, PunClass};
+use crate::pun::generator;
 use anyhow::Result;
 use chrono::Utc;
 use futures::StreamExt;
 use k8s_openapi::{
-    api::{
-        apps::v1::{Deployment, DeploymentSpec},
-        core::v1::*,
-    },
-    apimachinery::pkg::apis::meta::v1::{Condition, LabelSelector, Time},
+    api::{apps::v1::Deployment, core::v1::*},
+    apimachinery::pkg::apis::meta::v1::{Condition, Time},
 };
 use kube::{
-    Client, CustomResourceExt,
-    api::{Api, ListParams, ObjectList, ObjectMeta, Patch, PatchParams, Resource},
+    Client,
+    api::{Api, ListParams, Patch, PatchParams},
     runtime::{
         controller::{Action, Config, Controller},
         watcher,
     },
 };
 use std::{collections::BTreeMap, sync::Arc};
-use thiserror::Error;
 use tokio::time::Duration;
 use tracing::*;
-
-#[derive(Debug, Error)]
-enum Error {
-    #[error("Failed to create Pod: {0}")]
-    PunPodCreationFailed(#[source] kube::Error),
-    #[error("MissingObjectKey: {0}")]
-    MissingObjectKey(&'static str),
-    #[error("Failed to create Service: {0}")]
-    SvcCreationFailed(#[source] kube::Error),
-    #[error("Failed to find PunClass: {0}")]
-    PunClassNotFound(#[source] kube::Error),
-}
-
-fn get_ood_instance_name(pun: &Pun) -> Result<&String, Error> {
-    return pun
-        .spec
-        .ood_instance_ref
-        .name
-        .as_ref()
-        .ok_or_else(|| Error::MissingObjectKey(".spec.ood_instance_ref.name"));
-}
-fn build_deployment(
-    pun: &Pun,
-    punclass: &PunClass,
-    labels: BTreeMap<String, String>,
-    volumes: Vec<Volume>,
-    volume_mounts: Vec<VolumeMount>,
-) -> Result<Deployment, Error> {
-    let ood_instance_name = get_ood_instance_name(&pun)?;
-    let oref = pun.controller_owner_ref(&()).unwrap();
-    let current_namespace = pun
-        .metadata
-        .namespace
-        .as_ref()
-        .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?;
-    let image = punclass.spec.httpd.image.clone();
-
-    let dns_username = pun
-        .metadata
-        .name
-        .as_ref()
-        .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
-
-    let pod = Pod {
-        metadata: ObjectMeta {
-            name: Some(format!(
-                "{}-nginx-{}",
-                ood_instance_name,
-                pun.metadata.name.clone().unwrap()
-            )),
-            namespace: Some(current_namespace.to_string()),
-            labels: Some(labels.clone()),
-            owner_references: Some(vec![oref.clone()]),
-            ..ObjectMeta::default()
-        },
-        spec: Some(PodSpec {
-            containers: vec![Container {
-                image: Some(image),
-                image_pull_policy: Some("Always".to_string()),
-                security_context: Some(SecurityContext {
-                    ..Default::default()
-                }),
-                name: format!("{dns_username}"),
-                volume_mounts: Some(volume_mounts),
-                command: Some(vec![
-                    "/opt/krood/pun_entry.sh".to_string(),
-                    pun.spec.user.to_string(),
-                ]),
-
-                ..Default::default()
-            }],
-            volumes: Some(volumes),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    Ok(Deployment {
-        metadata: ObjectMeta {
-            name: Some(format!("{dns_username}-pun")),
-            namespace: Some(current_namespace.to_string()),
-            owner_references: Some(vec![oref.clone()]),
-            ..Default::default()
-        },
-        spec: Some(DeploymentSpec {
-            selector: LabelSelector {
-                match_expressions: None,
-                match_labels: Some(labels.clone()),
-            },
-            template: PodTemplateSpec {
-                metadata: Some(pod.metadata),
-                spec: pod.spec,
-            },
-            ..Default::default()
-        }),
-        ..Default::default()
-    })
-}
 
 /// Controller triggers this whenever our main object or our children changed
 async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error> {
@@ -177,12 +77,14 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
 
     // Generate desired world
 
-    let svc = generate_svc(&generator, labels.clone())?;
+    let svc = generator::generate_svc(&generator, labels.clone())?;
 
-    let (volumes, volume_mounts) = generate_volumes_mounts(&generator, &punclass, &iapps)?;
+    let (volumes, volume_mounts) =
+        generator::generate_volumes_mounts(&generator, &punclass, &iapps)?;
 
-    let deployment = build_deployment(&generator, &punclass, labels, volumes, volume_mounts)?;
-    
+    let deployment =
+        generator::build_deployment(&generator, &punclass, labels, volumes, volume_mounts)?;
+
     // Get current status
     let current_deployment = deployment_api
         .get_opt(
@@ -295,88 +197,6 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     Ok(Action::requeue(Duration::from_secs(300)))
 }
 
-fn generate_svc(pun: &Pun, labels: BTreeMap<String, String>) -> Result<Service, Error> {
-    let oref = pun.controller_owner_ref(&()).unwrap();
-    let current_namespace = pun
-        .metadata
-        .namespace
-        .as_ref()
-        .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?;
-
-    let dns_username = pun
-        .metadata
-        .name
-        .as_ref()
-        .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
-
-    Ok(Service {
-        metadata: ObjectMeta {
-            name: Some(format!("nginx-{dns_username}")),
-            namespace: Some(current_namespace.to_string()),
-            owner_references: Some(vec![oref.clone()]),
-            ..Default::default()
-        },
-        spec: Some(ServiceSpec {
-            cluster_ip: Some("None".to_string()),
-            ports: Some(vec![ServicePort {
-                port: 443,
-                ..Default::default()
-            }]),
-            selector: Some(labels.clone()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    })
-}
-
-fn generate_volumes_mounts(
-    pun: &Pun,
-    punclass: &PunClass,
-    iapps: &ObjectList<InteractiveApp>,
-) -> Result<(Vec<Volume>, Vec<VolumeMount>), Error> {
-    let ood_instance_name = get_ood_instance_name(pun)?;
-    let mut volumes = punclass.spec.httpd.extra_volumes.clone().unwrap_or(vec![]);
-    let mut volume_mounts = punclass
-        .spec
-        .httpd
-        .extra_volume_mounts
-        .clone()
-        .unwrap_or(vec![]);
-
-    let config_vol = Volume {
-        name: "clusters-d".to_string(),
-        config_map: Some(ConfigMapVolumeSource {
-            name: format!("{}-ood-cluster-config-files", ood_instance_name),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    volumes.push(config_vol);
-
-    for iapp in iapps {
-        let iapp_vol = iapp.spec.source.clone();
-        volumes.push(Volume {
-            image: Some(iapp_vol),
-            name: iapp.spec.name.clone(),
-            ..Default::default()
-        });
-        volume_mounts.push(VolumeMount {
-            name: iapp.spec.name.clone(),
-            mount_path: format!("/var/www/ood/apps/sys/{}", iapp.spec.name),
-            ..Default::default()
-        })
-    }
-
-    let cluster_volume_mount = VolumeMount {
-        mount_path: "/etc/ood/config/clusters.d".to_string(),
-        name: "clusters-d".to_string(),
-        ..Default::default()
-    };
-
-    volume_mounts.push(cluster_volume_mount);
-    Ok((volumes, volume_mounts))
-}
-
 /// The controller triggers this on reconcile errors
 fn error_policy(_object: Arc<Pun>, _error: &Error, _ctx: Arc<Data>) -> Action {
     Action::requeue(Duration::from_secs(1))
@@ -390,12 +210,10 @@ struct Data {
 pub async fn controller() -> Result<()> {
     let client = Client::try_default().await?;
 
-    // Api clients
     let feps = Api::<Pun>::all(client.clone());
     let deployments = Api::<Deployment>::all(client.clone());
     let svcs = Api::<Service>::all(client.clone());
 
-    // limit the controller to running a maximum of two concurrent reconciliations
     let config = Config::default().concurrency(2);
 
     Controller::new(feps, watcher::Config::default())
@@ -414,4 +232,3 @@ pub async fn controller() -> Result<()> {
     error!("controller terminated");
     Ok(())
 }
-

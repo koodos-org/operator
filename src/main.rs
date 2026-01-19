@@ -1,12 +1,14 @@
+mod controllers;
 mod crds;
 mod fep;
 mod ood;
-mod pun;
 use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
 use tracing::error;
 use tracing_subscriber;
+
+use crate::controllers::pun;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
