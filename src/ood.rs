@@ -123,14 +123,14 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
 
     let fep = FrontEndProxy {
         metadata: ObjectMeta {
-            name: Some(format!("{}",ood_instance_name)),
+            name: Some(format!("{}", ood_instance_name)),
             labels: Some(labels.clone()),
             owner_references: Some(vec![oref.clone()]),
 
             ..Default::default()
         },
         spec: FrontEndProxySpec {
-            name: format!("{}",ood_instance_name),
+            name: format!("{}", ood_instance_name),
             pun_class_ref: generator.spec.pun_class_ref.clone(),
             ood_instance_ref: generator.object_ref(&()),
             httpd: generator.spec.httpd.clone(),
