@@ -20,7 +20,7 @@ enum Commands {
     #[command()]
     Controller { resources: Resources },
     #[command()]
-    Crd { resources: Resources },
+    Crd,
 }
 
 #[derive(ValueEnum, Debug, Copy, Clone, PartialEq, Eq)]
@@ -49,21 +49,8 @@ async fn main() {
 
             error!("Controller {resources:?} with {result:?}");
         }
-        Commands::Crd { resources } => match resources {
-            Resources::Pun => {
-                println!("{}", pun::crd());
-            }
-            Resources::Fep => {
-                println!("{}", fep::crd());
-            }
-            Resources::Ood => {
-                println!("{}", ood::crd());
-            }
-            Resources::All => {
-                print!("{}---\n", fep::crd());
-                print!("{}---\n", pun::crd());
-                println!("{}", ood::crd());
-            }
-        },
+        Commands::Crd => {
+            println!("{}", crds::export_crds());
+        }
     }
 }

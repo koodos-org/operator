@@ -5,7 +5,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::*;
 use kube::{
-    Client, CustomResourceExt,
+    Client,
     api::{Api, ObjectMeta, Patch, PatchParams, Resource},
     runtime::{
         controller::{Action, Config, Controller},
@@ -285,8 +285,4 @@ pub async fn controller() -> Result<()> {
         .await;
     info!("controller terminated");
     Ok(())
-}
-
-pub fn crd() -> String {
-    serde_yaml::to_string(&OpenOnDemand::crd()).unwrap()
 }

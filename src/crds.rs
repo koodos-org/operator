@@ -1,12 +1,13 @@
 use k8s_openapi::{
     api::core::v1::{ImageVolumeSource, ObjectReference, Volume, VolumeMount},
+    apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition,
     apimachinery::pkg::apis::meta::v1::Condition,
 };
+use kube::CustomResourceExt;
 use kube_derive::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[kube(
     group = "ondemand.dev",
@@ -90,4 +91,23 @@ pub struct ComputeClusterSpec {
     #[serde(rename = "cluster.yml.erb")]
     pub cluster_yml_erb: String,
     pub name: String,
+}
+
+pub fn export_crds() -> String {
+    fn crd_to_string(crd: CustomResourceDefinition) -> String {
+        serde_yaml::to_string(&crd).unwrap()
+    }
+
+    let pun = crd_to_string(Pun::crd());
+    let pun_class = crd_to_string(PunClass::crd());
+    let ood = crd_to_string(OpenOnDemand::crd());
+    let ia = crd_to_string(InteractiveApp::crd());
+    let cluster = crd_to_string(ComputeCluster::crd());
+    let fep = crd_to_string(FrontEndProxy::crd());
+
+    let mut crd_bundle = String::new();
+    for crd in vec![pun, pun_class, ood, ia, cluster, fep] {
+        crd_bundle += &format!("---\n{crd}\n");
+    }
+    crd_bundle
 }

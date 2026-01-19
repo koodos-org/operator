@@ -415,8 +415,3 @@ pub async fn controller() -> Result<()> {
     Ok(())
 }
 
-pub fn crd() -> String {
-    let pun_class = serde_yaml::to_string(&PunClass::crd()).unwrap();
-    let pun = serde_yaml::to_string(&Pun::crd()).unwrap();
-    format!("{pun}\n---\n{pun_class}")
-}

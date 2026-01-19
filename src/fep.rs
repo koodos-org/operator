@@ -13,7 +13,7 @@ use k8s_openapi::{
     apimachinery::pkg::apis::meta::v1::LabelSelector,
 };
 use kube::{
-    Client, CustomResourceExt,
+    Client,
     api::{Api, ObjectMeta, Patch, PatchParams, Resource},
     runtime::{
         controller::{Action, Config, Controller},
@@ -39,7 +39,10 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
 
     let oref = generator.controller_owner_ref(&()).unwrap();
 
-    let labels = generator.metadata.labels.clone()
+    let labels = generator
+        .metadata
+        .labels
+        .clone()
         .ok_or_else(|| Error::MissingObjectKey(".metadata.labels"))?;
 
     let ood_instance_name = generator
@@ -349,10 +352,4 @@ pub async fn controller() -> Result<()> {
         .await;
     info!("controller terminated");
     Ok(())
-}
-
-pub fn crd() -> String {
-    let fep_crd = serde_yaml::to_string(&FrontEndProxy::crd()).unwrap();
-    let app_crd = serde_yaml::to_string(&InteractiveApp::crd()).unwrap();
-    return format!("{}---\n{}", fep_crd, app_crd);
 }
