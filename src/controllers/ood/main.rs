@@ -1,6 +1,7 @@
 // Nightly clippy (0.1.64) considers Drop a side effect, see https://github.com/rust-lang/rust-clippy/issues/9608
 #![allow(clippy::unnecessary_lazy_evaluations)]
 use crate::crds::{FrontEndProxy, FrontEndProxySpec, OpenOnDemand, OpenOnDemandStatus};
+use crate::controllers::ood::types::Error;
 use anyhow::Result;
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::*;
@@ -14,17 +15,8 @@ use kube::{
 };
 use kube_runtime::reflector::ObjectRef;
 use std::{collections::BTreeMap, sync::Arc};
-use thiserror::Error;
 use tokio::time::Duration;
 use tracing::*;
-
-#[derive(Debug, Error)]
-enum Error {
-    #[error("Failed to create Svc: {0}")]
-    SvcCreationFailed(#[source] kube::Error),
-    #[error("MissingObjectKey: {0}")]
-    MissingObjectKey(&'static str),
-}
 
 fn merge_yaml(base: &mut serde_yaml::Value, overlay: serde_yaml::Value) {
     match (base, overlay) {
@@ -52,9 +44,9 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
     let ood_instance_name = generator.metadata.name.clone().unwrap();
     // Base configs to make the custom proxy and stage logic work in the container
     let mut krood_portal_config =
-        serde_yaml::from_str(include_str!("../assets/ood_portal.yml")).unwrap();
+        serde_yaml::from_str(include_str!("../../../assets/ood_portal.yml")).unwrap();
     let mut krood_nginx_stage_config =
-        serde_yaml::from_str(include_str!("../assets/nginx_stage.yml")).unwrap();
+        serde_yaml::from_str(include_str!("../../../assets/nginx_stage.yml")).unwrap();
 
     let mut labels = BTreeMap::new();
     labels.insert("app".to_string(), "ood".to_string());
