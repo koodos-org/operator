@@ -25,24 +25,30 @@ use tracing::*;
 async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error> {
     // Initial setup
     let client = &ctx.client;
+    let mut conditions = PUNConditions::new();
+
     let current_namespace = generator
         .metadata
         .namespace
         .as_ref()
         .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?;
 
-    let mut conditions = PUNConditions::new();
+    let pun_name = generator
+        .metadata
+        .name
+        .as_ref()
+        .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
 
-    let deployment_api = Api::<Deployment>::namespaced(client.clone(), current_namespace);
-
-    let punclass_api = Api::<PunClass>::all(client.clone());
-    let svc_api = Api::<Service>::namespaced(client.clone(), current_namespace);
     let ood_instance_name = generator
         .spec
         .ood_instance_ref
         .name
         .as_ref()
         .ok_or_else(|| Error::MissingObjectKey(".spec.ood_instance_ref.name"))?;
+
+    let deployment_api = Api::<Deployment>::namespaced(client.clone(), current_namespace);
+    let punclass_api = Api::<PunClass>::all(client.clone());
+    let svc_api = Api::<Service>::namespaced(client.clone(), current_namespace);
 
     let mut labels = generator
         .metadata
@@ -55,7 +61,6 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     labels.insert("ood-instance".to_string(), ood_instance_name.clone());
 
     // Read other resources for additional spec info
-
     let punclass = punclass_api
         .get(
             &generator
@@ -73,15 +78,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     let lp = ListParams::default().labels(&format!("ood-cluster={}", ood_instance_name));
     let iapps = iapps_api.list(&lp).await.unwrap();
 
-    // TODO: PUN observed gen handling
-
-    // Generate desired world
-    let pun_name = generator
-        .metadata
-        .name
-        .as_ref()
-        .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
-
+    // Generate desired state specs
     let svc = generator::generate_svc(&generator, labels.clone())?;
 
     let (volumes, volume_mounts) =
@@ -95,6 +92,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         .name
         .as_ref()
         .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
+
     // Get current status
     let current_deployment = deployment_api
         .get_opt(&deployment_name)
