@@ -4,6 +4,7 @@
 use crate::controllers::fep::generator;
 use crate::controllers::fep::types::Error;
 use crate::crds::{FrontEndProxy, InteractiveApp};
+use crate::utils::status::FEPConditions;
 use anyhow::Result;
 use futures::StreamExt;
 use k8s_openapi::api::{
@@ -23,36 +24,58 @@ use std::sync::Arc;
 use tokio::time::Duration;
 use tracing::*;
 
-/// Controller triggers this whenever our main object or our children changed
 async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Action, Error> {
     let client = &ctx.client;
 
     let oref = generator.controller_owner_ref(&()).unwrap();
-
+    let fep_spec = generator.spec.clone();
     let labels = generator
         .metadata
         .labels
         .clone()
         .ok_or_else(|| Error::MissingObjectKey(".metadata.labels"))?;
-
     let current_namespace = generator
         .metadata
         .namespace
         .as_ref()
         .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?;
-
-    let fep_spec = generator.spec.clone();
-    let spec_generator =
-        generator::FEPSpecGenerator::new(fep_spec, current_namespace.to_string(), oref, labels);
-
-    let role = spec_generator.role()?;
-
-    let role_binding = spec_generator.role_binding()?;
-
-    let service_account = spec_generator.service_account()?;
+    let fep_name = generator
+        .metadata
+        .name
+        .as_ref()
+        .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
 
     let role_api = Api::<Role>::namespaced(client.clone(), current_namespace);
+    let rolebinding_api = Api::<RoleBinding>::namespaced(client.clone(), current_namespace);
+    let cm_api = Api::<ConfigMap>::namespaced(client.clone(), current_namespace);
+    let sa_api = Api::<ServiceAccount>::namespaced(client.clone(), current_namespace);
+    let deployment_api = Api::<Deployment>::namespaced(client.clone(), current_namespace);
+    let fep_api = Api::<FrontEndProxy>::namespaced(client.clone(), current_namespace);
 
+    let spec_generator =
+        generator::FEPSpecGenerator::new(fep_spec, current_namespace.to_string(), oref, labels);
+    // Generate state
+    let service_account = spec_generator.service_account()?;
+    let template_cm = spec_generator.pun_template_config_map()?;
+    let role_binding = spec_generator.role_binding()?;
+    let role = spec_generator.role()?;
+    let deployment = spec_generator.deployment()?;
+
+    // Read current state
+    let deployment_name = deployment
+        .metadata
+        .name
+        .as_ref()
+        .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
+
+    // Get current status
+    let current_deployment = deployment_api
+        .get_opt(&deployment_name)
+        .await
+        .map_err(|_| Error::MissingObjectKey("."))?;
+    let current_deploy_gen = current_deployment.and_then(|dep| dep.metadata.generation);
+
+    // Apply desired state
     role_api
         .patch(
             role.metadata
@@ -64,8 +87,6 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         )
         .await
         .map_err(Error::HTTPDPodCreationFailed)?;
-
-    let rolebinding_api = Api::<RoleBinding>::namespaced(client.clone(), current_namespace);
 
     rolebinding_api
         .patch(
@@ -80,24 +101,6 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         .await
         .map_err(Error::HTTPDPodCreationFailed)?;
 
-    let cm_api = Api::<ConfigMap>::namespaced(client.clone(), &current_namespace);
-
-    let template_cm = spec_generator.pun_template_config_map()?;
-    cm_api
-        .patch(
-            template_cm
-                .metadata
-                .name
-                .as_ref()
-                .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
-            &PatchParams::apply("deployments"),
-            &Patch::Apply(&template_cm),
-        )
-        .await
-        .map_err(Error::HTTPDPodCreationFailed)?;
-
-    let sa_api = Api::<ServiceAccount>::namespaced(client.clone(), current_namespace);
-
     sa_api
         .patch(
             service_account
@@ -111,34 +114,80 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         .await
         .map_err(Error::HTTPDPodCreationFailed)?;
 
-
-    // Pod creation
-    let deploy_api = Api::<Deployment>::namespaced(client.clone(), current_namespace);
-
-    let deploy = spec_generator.deployment()?;
-
-    deploy_api
+    cm_api
         .patch(
-            deploy
+            template_cm
                 .metadata
                 .name
                 .as_ref()
                 .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
             &PatchParams::apply("deployments"),
-            &Patch::Apply(&deploy),
+            &Patch::Apply(&template_cm),
         )
         .await
         .map_err(Error::HTTPDPodCreationFailed)?;
 
+    let new_deployment = deployment_api
+        .patch(
+            deployment
+                .metadata
+                .name
+                .as_ref()
+                .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
+            &PatchParams::apply("deployments"),
+            &Patch::Apply(&deployment),
+        )
+        .await
+        .map_err(Error::HTTPDPodCreationFailed)?;
+
+    // Check status of async resources
+    let mut conditions = FEPConditions::new();
+    let conditions = 'cond_check: {
+        // If deployment spec was updated we have to wait for an new event to trust deployment status
+        if current_deploy_gen != new_deployment.metadata.generation {
+            info!("Deployment updated");
+            conditions.deployment(
+                generator.metadata.generation,
+                "Deployment has been updated and is progressing".to_string(),
+                "False".to_string(),
+            );
+            break 'cond_check conditions;
+        }
+
+        let ready_pods = new_deployment
+            .status
+            .and_then(|status| status.ready_replicas);
+
+        // If spec is current and pods are ready
+        if ready_pods == Some(1) {
+            info!("Deployment is ready; PUN is ready");
+            conditions.deployment(
+                generator.metadata.generation,
+                "Deployment has ready pod".to_string(),
+                "True".to_string(),
+            );
+            conditions.ready(
+                generator.metadata.generation,
+                "Deployment ready, PUN ready".to_string(),
+                "True".to_string(),
+            );
+        }
+        conditions
+    };
+
+    let status = conditions.get_patch();
+    fep_api
+        .patch_status(fep_name, &PatchParams::default(), &Patch::Merge(status))
+        .await
+        .map_err(Error::StatusPatchError)?;
+
     Ok(Action::requeue(Duration::from_secs(300)))
 }
 
-/// The controller triggers this on reconcile errors
 fn error_policy(_object: Arc<FrontEndProxy>, _error: &Error, _ctx: Arc<Data>) -> Action {
     Action::requeue(Duration::from_secs(1))
 }
 
-// Data we want access to in error/reconcile calls
 struct Data {
     client: Client,
 }
@@ -146,13 +195,12 @@ struct Data {
 pub async fn controller() -> Result<()> {
     let client = Client::try_default().await?;
 
-    // Api clients
+    // API clients
     let feps = Api::<FrontEndProxy>::all(client.clone());
     let sas = Api::<ServiceAccount>::all(client.clone());
     let deployments = Api::<Deployment>::all(client.clone());
     let iapps = Api::<InteractiveApp>::all(client.clone());
 
-    // limit the controller to running a maximum of two concurrent reconciliations
     let config = Config::default().concurrency(1);
 
     Controller::new(feps, watcher::Config::default())
@@ -169,6 +217,5 @@ pub async fn controller() -> Result<()> {
             }
         })
         .await;
-    info!("controller terminated");
     Ok(())
 }

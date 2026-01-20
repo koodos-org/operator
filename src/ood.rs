@@ -135,6 +135,7 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
             ood_instance_ref: generator.object_ref(&()),
             httpd: generator.spec.httpd.clone(),
         },
+        status: None
     };
 
     // Getting Kubernetes API clients for needed resources

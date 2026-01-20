@@ -39,8 +39,14 @@ pub struct HTTPDObj {
     pub extra_volume_mounts: Option<Vec<VolumeMount>>,
     pub extra_volumes: Option<Vec<Volume>>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct FEPStatus {
+    pub conditions: Vec<Condition>,
+}
+
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[kube(group = "ondemand.dev", version = "v1", kind = "FrontEndProxy")]
+#[kube(group = "ondemand.dev", version = "v1", kind = "FrontEndProxy", status = FEPStatus)]
 #[kube(shortname = "fep", namespaced)]
 pub struct FrontEndProxySpec {
     pub name: String,
