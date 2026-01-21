@@ -21,6 +21,12 @@ pub struct FEPConditions {
     ready: Condition,
 }
 
+pub struct OODConditions {
+    fep: Condition,
+    ready: Condition,
+}
+
+
 impl PUNConditions {
     pub fn new() -> Self {
         PUNConditions {
@@ -120,6 +126,58 @@ impl FEPConditions {
     pub fn get_patch(self) -> Value {
         let mut conditions = vec![];
         conditions.push(self.deployment);
+        conditions.push(self.ready);
+
+        status_patch(conditions)
+    }
+}
+
+impl OODConditions {
+    pub fn new() -> Self {
+        OODConditions {
+            fep: Condition {
+                status: "Unknown".to_string(),
+                type_: "FEPReady".to_string(),
+                last_transition_time: Time(Utc::now()),
+                message: String::new(),
+                observed_generation: None,
+                reason: String::new(),
+            },
+            ready: Condition {
+                status: "Unknown".to_string(),
+                type_: "Ready".to_string(),
+                last_transition_time: Time(Utc::now()),
+                message: String::new(),
+                observed_generation: None,
+                reason: String::new(),
+            },
+        }
+    }
+
+    pub fn fep(&mut self, generation: Option<i64>, message: String, status: String) {
+        self.fep = Condition {
+            last_transition_time: Time(Utc::now()),
+            message,
+            observed_generation: generation,
+            reason: String::new(),
+            status,
+            type_: format!("DeploymentReady"),
+        }
+    }
+    pub fn ready(&mut self, generation: Option<i64>, message: String, status: String) {
+        self.ready = Condition {
+            last_transition_time: Time(Utc::now()),
+            message,
+            observed_generation: generation,
+            reason: String::new(),
+            status,
+            type_: format!("Ready"),
+        }
+    }
+
+    pub fn get_patch(self) -> Value {
+        let mut conditions = vec![];
+        conditions.push(self.fep);
         conditions.push(self.ready);
 
         status_patch(conditions)

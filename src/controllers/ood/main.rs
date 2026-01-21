@@ -1,13 +1,15 @@
 // Nightly clippy (0.1.64) considers Drop a side effect, see https://github.com/rust-lang/rust-clippy/issues/9608
 #![allow(clippy::unnecessary_lazy_evaluations)]
-use crate::crds::{FrontEndProxy, FrontEndProxySpec, OpenOnDemand, OpenOnDemandStatus};
+use crate::controllers::ood::generator::OODSpecGenerator;
 use crate::controllers::ood::types::Error;
+use crate::crds::{FrontEndProxy, OpenOnDemand};
+use crate::utils::status::OODConditions;
 use anyhow::Result;
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::*;
 use kube::{
     Client,
-    api::{Api, ObjectMeta, Patch, PatchParams, Resource},
+    api::{Api, Patch, PatchParams, Resource},
     runtime::{
         controller::{Action, Config, Controller},
         watcher,
@@ -18,153 +20,40 @@ use std::{collections::BTreeMap, sync::Arc};
 use tokio::time::Duration;
 use tracing::*;
 
-fn merge_yaml(base: &mut serde_yaml::Value, overlay: serde_yaml::Value) {
-    match (base, overlay) {
-        (serde_yaml::Value::Mapping(under), serde_yaml::Value::Mapping(over)) => {
-            for (k, v) in over {
-                match under.get_mut(&k) {
-                    Some(value) => {
-                        merge_yaml(value, v);
-                    }
-                    None => {
-                        under.insert(k, v);
-                    }
-                };
-            }
-        }
-        (under, over) => *under = over,
-    }
-}
-
 /// Controller triggers this whenever our main object or our children changed
 async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Action, Error> {
     let client = &ctx.client;
     let oref = generator.controller_owner_ref(&()).unwrap();
-
     let ood_instance_name = generator.metadata.name.clone().unwrap();
-    // Base configs to make the custom proxy and stage logic work in the container
-    let mut krood_portal_config =
-        serde_yaml::from_str(include_str!("../../../assets/ood_portal.yml")).unwrap();
-    let mut krood_nginx_stage_config =
-        serde_yaml::from_str(include_str!("../../../assets/nginx_stage.yml")).unwrap();
-
+    let current_namespace = generator
+        .metadata
+        .namespace
+        .as_ref()
+        .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?;
     let mut labels = BTreeMap::new();
     labels.insert("app".to_string(), "ood".to_string());
     labels.insert("ood-cluster".to_string(), ood_instance_name.clone());
 
-    let mut config_files = BTreeMap::new();
-    let site_portal_config =
-        serde_yaml::from_str::<serde_yaml::Value>(&generator.spec.ood_portal_yml.clone()).unwrap();
-    let site_nginx_stage_config =
-        serde_yaml::from_str::<serde_yaml::Value>(&generator.spec.nginx_stage_yml.clone()).unwrap();
-
-    // Merge site configs into base config. Note that the site config overrides the base config
-    merge_yaml(&mut krood_portal_config, site_portal_config);
-    merge_yaml(&mut krood_nginx_stage_config, site_nginx_stage_config);
-
-    config_files.insert(
-        "ood_portal.yml".to_string(),
-        serde_yaml::to_string(&krood_portal_config).unwrap(),
-    );
-    config_files.insert(
-        "nginx_stage.yml".to_string(),
-        serde_yaml::to_string(&krood_nginx_stage_config).unwrap(),
-    );
-    let svc = Service {
-        metadata: ObjectMeta {
-            name: Some(ood_instance_name.clone()),
-            namespace: generator.metadata.namespace.clone(),
-            owner_references: Some(vec![oref.clone()]),
-            ..Default::default()
-        },
-        spec: Some(ServiceSpec {
-            ports: Some(vec![ServicePort {
-                port: 443,
-                ..Default::default()
-            }]),
-            type_: Some("LoadBalancer".to_string()),
-            selector: Some(labels.clone()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    let ood_cm = ConfigMap {
-        metadata: ObjectMeta {
-            name: Some(format!("{}-ood-config-files", ood_instance_name.clone())),
-            owner_references: Some(vec![oref.clone()]),
-            ..Default::default()
-        },
-        data: Some(config_files),
-        ..Default::default()
-    };
-
-    let clusters_cm = ConfigMap {
-        metadata: ObjectMeta {
-            name: Some(format!(
-                "{}-ood-cluster-config-files",
-                ood_instance_name.clone()
-            )),
-            labels: Some(labels.clone()),
-            owner_references: Some(vec![oref.clone()]),
-            ..Default::default()
-        },
-        data: Some(generator.spec.clusters.clone()),
-        ..Default::default()
-    };
-
-    let fep = FrontEndProxy {
-        metadata: ObjectMeta {
-            name: Some(format!("{}", ood_instance_name)),
-            labels: Some(labels.clone()),
-            owner_references: Some(vec![oref.clone()]),
-
-            ..Default::default()
-        },
-        spec: FrontEndProxySpec {
-            name: format!("{}", ood_instance_name),
-            pun_class_ref: generator.spec.pun_class_ref.clone(),
-            ood_instance_ref: generator.object_ref(&()),
-            httpd: generator.spec.httpd.clone(),
-        },
-        status: None
-    };
-
-    // Getting Kubernetes API clients for needed resources
-    let svc_api = Api::<Service>::namespaced(
-        client.clone(),
-        generator
-            .metadata
-            .namespace
-            .as_ref()
-            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-    );
-    let cm_api = Api::<ConfigMap>::namespaced(
-        client.clone(),
-        generator
-            .metadata
-            .namespace
-            .as_ref()
-            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-    );
-    let fep_api = Api::<FrontEndProxy>::namespaced(
-        client.clone(),
-        generator
-            .metadata
-            .namespace
-            .as_ref()
-            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
+    let spec_generator = OODSpecGenerator::new(
+        generator.spec.clone(),
+        ood_instance_name.clone(),
+        current_namespace.to_string(),
+        oref.clone(),
+        labels.clone(),
     );
 
-    let ood_api = Api::<OpenOnDemand>::namespaced(
-        client.clone(),
-        generator
-            .metadata
-            .namespace
-            .as_ref()
-            .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-    );
+    let svc_api = Api::<Service>::namespaced(client.clone(), current_namespace);
+    let cm_api = Api::<ConfigMap>::namespaced(client.clone(), current_namespace);
+    let fep_api = Api::<FrontEndProxy>::namespaced(client.clone(), current_namespace);
+    let ood_api = Api::<OpenOnDemand>::namespaced(client.clone(), current_namespace);
 
+    // Generate desired state
+    let svc = spec_generator.svc()?;
+    let ood_cm = spec_generator.ood_cm()?;
+    let clusters_cm = spec_generator.cluster_cm()?;
+    let fep = spec_generator.fep(generator.object_ref(&()))?;
+
+    // Apply desired state
     cm_api
         .patch(
             ood_cm.metadata.name.as_ref().unwrap(),
@@ -181,7 +70,7 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
         )
         .await
         .unwrap();
-    fep_api
+    let new_fep = fep_api
         .patch(
             fep.metadata.name.as_ref().unwrap(),
             &PatchParams::apply("frontendproxies.ondemand.dev"),
@@ -189,7 +78,6 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
         )
         .await
         .unwrap();
-
     svc_api
         .patch(
             svc.metadata
@@ -202,23 +90,53 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
         .await
         .map_err(Error::SvcCreationFailed)?;
 
-    let pp = PatchParams::default();
+    // Check for conditions
+    let mut conditions = OODConditions::new();
 
-    let data = serde_json::json!({
-        "status": OpenOnDemandStatus {
-            conditions: vec![]
-        }
-    });
+    let fep_ready = {
+        let gener = new_fep.metadata.generation;
+        new_fep.status.as_ref().map(|status| {
+            status.conditions.iter().any(|cond| {
+                cond.type_ == "Ready" && cond.status == "True" && cond.observed_generation == gener
+            })
+        })
+    }
+    .unwrap_or(false);
 
+    if fep_ready {
+        conditions.fep(
+            generator.metadata.generation,
+            "FEP is ready".to_string(),
+            "True".to_string(),
+        );
+        conditions.ready(
+            generator.metadata.generation,
+            "All resources ready".to_string(),
+            "True".to_string(),
+        );
+    } else {
+        conditions.fep(
+            generator.metadata.generation,
+            "Awaiting FEP readiness".to_string(),
+            "False".to_string(),
+        );
+        conditions.ready(
+            generator.metadata.generation,
+            "Awaiting resources readiness".to_string(),
+            "False".to_string(),
+        );
+    }
+
+    // Patch status
+    let status = conditions.get_patch();
     ood_api
         .patch_status(
             &generator.metadata.name.clone().unwrap(),
-            &pp,
-            &Patch::Merge(data),
+            &PatchParams::default(),
+            &Patch::Merge(status),
         )
         .await
         .unwrap();
-
     Ok(Action::requeue(Duration::from_secs(300)))
 }
 
@@ -239,6 +157,7 @@ pub async fn controller() -> Result<()> {
     let oods = Api::<OpenOnDemand>::all(client.clone());
     let cms = Api::<ConfigMap>::all(client.clone());
     let svcs = Api::<Service>::all(client.clone());
+    let feps = Api::<FrontEndProxy>::all(client.clone());
 
     // limit the controller to running a maximum of two concurrent reconciliations
     let config = Config::default().concurrency(2);
@@ -266,6 +185,7 @@ pub async fn controller() -> Result<()> {
                 None
             }
         })
+        .owns(feps, watcher::Config::default())
         .with_config(config)
         .shutdown_on_signal()
         .run(reconcile, error_policy, Arc::new(Data { client }))

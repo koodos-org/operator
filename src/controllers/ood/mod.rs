@@ -1,4 +1,4 @@
 mod main;
-// mod generator;
+mod generator;
 mod types;
 pub use main::controller;

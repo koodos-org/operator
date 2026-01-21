@@ -5,6 +5,7 @@ pub enum Error {
     SvcCreationFailed(#[source] kube::Error),
     #[error("MissingObjectKey: {0}")]
     MissingObjectKey(&'static str),
+
 }
 
 
