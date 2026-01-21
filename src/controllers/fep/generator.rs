@@ -206,7 +206,7 @@ spec:
         let pod = Pod {
             metadata: self.get_base_obj_metadata(self.spec.name.clone())?,
             spec: Some(PodSpec {
-                service_account_name: Some("fep-cluster".to_string()),
+                service_account_name: Some(format!("{}-fep-svc-acct", self.ood_instance_name()?)),
                 containers: vec![Container {
                     env: Some(vec![EnvVar {
                         name: "KROOD_OOD_NAME".to_string(),
