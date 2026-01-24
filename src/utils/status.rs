@@ -3,10 +3,11 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use serde_json::Value;
 
 fn status_patch(conditions: Vec<Condition>) -> Value {
-    serde_json::json!({
-            "status": {
-                "conditions": conditions
-    }
+    serde_json::json!(
+    {
+        "status": {
+            "conditions": conditions
+        }
     })
 }
 
@@ -25,7 +26,6 @@ pub struct OODConditions {
     fep: Condition,
     ready: Condition,
 }
-
 
 impl PUNConditions {
     pub fn new() -> Self {
@@ -78,7 +78,6 @@ impl PUNConditions {
         status_patch(conditions)
     }
 }
-
 
 impl FEPConditions {
     pub fn new() -> Self {

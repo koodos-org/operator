@@ -16,6 +16,7 @@ use kube::{
     },
 };
 use kube_runtime::reflector::ObjectRef;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::time::Duration;
 use tracing::*;
@@ -49,9 +50,55 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
 
     // Generate desired state
     let svc = spec_generator.svc()?;
-    let ood_cm = spec_generator.ood_cm()?;
-    let clusters_cm = spec_generator.cluster_cm()?;
+    let mut ood_cm = spec_generator.ood_cm()?;
+    let mut clusters_cm = spec_generator.cluster_cm()?;
+    let mut hash_state = DefaultHasher::new();
+    ood_cm.data.hash(&mut hash_state);
+    clusters_cm.data.hash(&mut hash_state);
+    let config_hash = format!("{:x}", hash_state.finish());
+    ood_cm.metadata.name = ood_cm
+        .metadata
+        .name
+        .map(|name| format!("{name}-{config_hash}"));
+    clusters_cm.metadata.name = clusters_cm
+        .metadata
+        .name
+        .map(|name| format!("{name}-{config_hash}"));
+
     let fep = spec_generator.fep(generator.object_ref(&()))?;
+
+    // Hash based CMs
+    cm_api
+        .patch(
+            ood_cm.metadata.name.as_ref().unwrap(),
+            &PatchParams::apply("openondemands.ondemand.dev"),
+            &Patch::Apply(&ood_cm),
+        )
+        .await
+        .unwrap();
+    cm_api
+        .patch(
+            clusters_cm.metadata.name.as_ref().unwrap(),
+            &PatchParams::apply("openondemands.ondemand.dev"),
+            &Patch::Apply(&clusters_cm),
+        )
+        .await
+        .unwrap();
+
+    let hash_status = serde_json::json!({
+        "status": {
+            "config_hash": config_hash
+        }
+    });
+
+    ood_api
+        .patch_status(
+            &generator.metadata.name.clone().unwrap(),
+            &PatchParams::default(),
+            &Patch::Merge(hash_status),
+        )
+        .await
+        .unwrap();
 
     // Apply desired state
     cm_api
@@ -129,6 +176,7 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
 
     // Patch status
     let status = conditions.get_patch();
+
     ood_api
         .patch_status(
             &generator.metadata.name.clone().unwrap(),

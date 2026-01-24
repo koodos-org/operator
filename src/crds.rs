@@ -80,6 +80,7 @@ pub struct OpenOnDemandSpec {
 pub struct OpenOnDemandStatus {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
+    pub config_hash: Option<String>
 }
 
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]

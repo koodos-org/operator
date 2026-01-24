@@ -3,7 +3,7 @@
 
 use crate::controllers::fep::generator;
 use crate::controllers::fep::types::Error;
-use crate::crds::{FrontEndProxy, InteractiveApp};
+use crate::crds::{FrontEndProxy, InteractiveApp, OpenOnDemand};
 use crate::utils::status::FEPConditions;
 use anyhow::Result;
 use futures::StreamExt;
@@ -20,6 +20,7 @@ use kube::{
         watcher,
     },
 };
+use kube_runtime::reflector::ObjectRef;
 use std::sync::Arc;
 use tokio::time::Duration;
 use tracing::*;
@@ -51,9 +52,20 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     let sa_api = Api::<ServiceAccount>::namespaced(client.clone(), current_namespace);
     let deployment_api = Api::<Deployment>::namespaced(client.clone(), current_namespace);
     let fep_api = Api::<FrontEndProxy>::namespaced(client.clone(), current_namespace);
+    let ood_api = Api::<OpenOnDemand>::namespaced(client.clone(), current_namespace);
+
+    let ood_instance = ood_api.get_status(
+        generator
+            .spec
+            .ood_instance_ref
+            .name.as_ref()
+            .ok_or(Error::MissingObjectKey(".spec.ood_instance_ref.name"))?,
+    ).await.map_err(Error::OODResolutionFailed)?;
+
+    let hash = ood_instance.status.unwrap().config_hash.unwrap();
 
     let spec_generator =
-        generator::FEPSpecGenerator::new(fep_spec, current_namespace.to_string(), oref, labels);
+        generator::FEPSpecGenerator::new(fep_spec, current_namespace.to_string(), oref, labels, hash);
     // Generate state
     let service_account = spec_generator.service_account()?;
     let template_cm = spec_generator.pun_template_config_map()?;
@@ -200,13 +212,22 @@ pub async fn controller() -> Result<()> {
     let sas = Api::<ServiceAccount>::all(client.clone());
     let deployments = Api::<Deployment>::all(client.clone());
     let iapps = Api::<InteractiveApp>::all(client.clone());
-
+    let oods = Api::<OpenOnDemand>::all(client.clone());
     let config = Config::default().concurrency(1);
 
     Controller::new(feps, watcher::Config::default())
         .owns(deployments, watcher::Config::default())
         .owns(iapps, watcher::Config::default())
         .owns(sas, watcher::Config::default())
+        .watches(oods, watcher::Config::default(), |ood| {
+            // Makes each OOD update force an update on any FEP resource with the same name and
+            // namespace
+            let ood_name = ood.metadata.name;
+            let ood_ns = ood.metadata.namespace;
+            ood_name
+                .zip(ood_ns)
+                .map(|(name, namespace)| ObjectRef::new(&name).within(&namespace))
+        })
         .with_config(config)
         .shutdown_on_signal()
         .run(reconcile, error_policy, Arc::new(Data { client }))

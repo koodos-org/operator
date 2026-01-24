@@ -20,6 +20,7 @@ pub struct FEPSpecGenerator {
     current_namespace: String,
     oref: OwnerReference,
     labels: BTreeMap<String, String>,
+    config_hash: String,
 }
 
 impl FEPSpecGenerator {
@@ -28,12 +29,14 @@ impl FEPSpecGenerator {
         current_namespace: String,
         oref: OwnerReference,
         labels: BTreeMap<String, String>,
+        config_hash: String,
     ) -> Self {
         FEPSpecGenerator {
             spec,
             current_namespace,
             oref,
             labels,
+            config_hash,
         }
     }
 
@@ -173,7 +176,11 @@ spec:
         let config_volume = Volume {
             name: "ood-portal".to_string(),
             config_map: Some(ConfigMapVolumeSource {
-                name: format!("{}-ood-config-files", self.ood_instance_name()?),
+                name: format!(
+                    "{}-ood-config-files-{}",
+                    self.ood_instance_name()?,
+                    self.config_hash
+                ),
                 ..Default::default()
             }),
             ..Default::default()
