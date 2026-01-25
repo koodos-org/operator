@@ -1,13 +1,13 @@
 // Nightly clippy (0.1.64) considers Drop a side effect, see https://github.com/rust-lang/rust-clippy/issues/9608
 #![allow(clippy::unnecessary_lazy_evaluations)]
-
 use super::types::Error;
-use crate::crds::{InteractiveApp, Pun, PunClass};
+use crate::crds::{InteractiveApp, OpenOnDemand, Pun, PunClass};
 use crate::pun::generator;
 use crate::utils::status::PUNConditions;
 use anyhow::Result;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::{apps::v1::Deployment, core::v1::*};
+use kube::ResourceExt;
 use kube::{
     Client,
     api::{Api, ListParams, Patch, PatchParams},
@@ -16,6 +16,9 @@ use kube::{
         watcher,
     },
 };
+use kube_runtime::WatchStreamExt;
+use kube_runtime::reflector::{self, Lookup, ObjectRef};
+use std::future::ready;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::time::Duration;
 use tracing::*;
@@ -181,12 +184,40 @@ pub async fn controller() -> Result<()> {
     let feps = Api::<Pun>::all(client.clone());
     let deployments = Api::<Deployment>::all(client.clone());
     let svcs = Api::<Service>::all(client.clone());
+    let oods = Api::<OpenOnDemand>::all(client.clone());
+    let puns = Api::<Pun>::all(client.clone());
+
+    // Create store to store PUN objects in local cache
+    let (child_reader, child_writer) = reflector::store();
+    let watcher = watcher(puns, watcher::Config::default()).map_ok(|event| {
+        event.modify(|pun| {
+            pun.managed_fields_mut().clear();
+            pun.annotations_mut().clear();
+            pun.status = None;
+        })
+    });
+
+    // Start reflector in background thread
+    let rf = reflector::reflector(child_writer, watcher);
+    let _ = tokio::spawn(async {
+        rf.applied_objects().for_each(|_obj| ready(())).await;
+    });
 
     let config = Config::default().concurrency(2);
 
     Controller::new(feps, watcher::Config::default())
         .owns(deployments, watcher::Config::default())
         .owns(svcs, watcher::Config::default())
+        .watches(oods, watcher::Config::default(), move |ood| {
+            let ood_name = ood.metadata.name.unwrap().clone();
+            // Query store for PUNs with matching ood_instance_ref name
+            child_reader
+                .state()
+                .iter()
+                .filter(move |pun| pun.spec.ood_instance_ref.name.as_ref().unwrap() == &ood_name)
+                .map(|pun| pun.to_object_ref(()))
+                .collect::<Vec<ObjectRef<Pun>>>()
+        })
         .with_config(config)
         .shutdown_on_signal()
         .run(reconcile, error_policy, Arc::new(Data { client }))
