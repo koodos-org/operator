@@ -76,10 +76,10 @@ impl FEPSpecGenerator {
 apiVersion: ondemand.dev/v1
 kind: Pun
 metadata:
-    name: \"{ood_instance_name}-$DNS_OOD_USER\"
-    namespace: \"$NAMESPACE\"
+    name: "{ood_instance_name}-$DNS_OOD_USER"
+    namespace: "$NAMESPACE"
 spec:
-    user: \"$OOD_USER\"
+    user: "$OOD_USER"
     pun_class_ref:
         name: {pun_class_name}
     ood_instance_ref:
