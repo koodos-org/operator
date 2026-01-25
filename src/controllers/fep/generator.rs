@@ -186,7 +186,19 @@ spec:
             ..Default::default()
         };
         volumes.push(config_volume);
-
+        let cluster_volume = Volume {
+            name: "clusters-d".to_string(),
+            config_map: Some(ConfigMapVolumeSource {
+                name: format!(
+                    "{}-ood-cluster-config-files-{}",
+                    self.ood_instance_name()?,
+                    self.config_hash
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        volumes.push(cluster_volume);
         Ok(volumes)
     }
 
@@ -206,6 +218,13 @@ spec:
             ..Default::default()
         };
         volume_mounts.push(config_vol_mount);
+
+        let cluster_volume_mount = VolumeMount {
+            mount_path: "/etc/ood/config/clusters.d".to_string(),
+            name: "clusters-d".to_string(),
+            ..Default::default()
+        };
+        volume_mounts.push(cluster_volume_mount);
 
         Ok(volume_mounts)
     }
