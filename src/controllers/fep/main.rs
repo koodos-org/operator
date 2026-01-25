@@ -54,23 +54,32 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     let fep_api = Api::<FrontEndProxy>::namespaced(client.clone(), current_namespace);
     let ood_api = Api::<OpenOnDemand>::namespaced(client.clone(), current_namespace);
 
-    let ood_instance = ood_api.get_status(
-        generator
-            .spec
-            .ood_instance_ref
-            .name.as_ref()
-            .ok_or(Error::MissingObjectKey(".spec.ood_instance_ref.name"))?,
-    ).await.map_err(Error::OODResolutionFailed)?;
+    let ood_instance = ood_api
+        .get_status(
+            generator
+                .spec
+                .ood_instance_ref
+                .name
+                .as_ref()
+                .ok_or(Error::MissingObjectKey(".spec.ood_instance_ref.name"))?,
+        )
+        .await
+        .map_err(Error::OODResolutionFailed)?;
 
     let hash = ood_instance.status.and_then(|status| status.config_hash);
     let hash = if let Some(hash) = hash {
         hash
     } else {
-        return Ok(Action::requeue(Duration::from_secs(300)))
+        return Ok(Action::requeue(Duration::from_secs(300)));
     };
 
-    let spec_generator =
-        generator::FEPSpecGenerator::new(fep_spec, current_namespace.to_string(), oref, labels, hash);
+    let spec_generator = generator::FEPSpecGenerator::new(
+        fep_spec,
+        current_namespace.to_string(),
+        oref,
+        labels,
+        hash,
+    );
     // Generate state
     let service_account = spec_generator.service_account()?;
     let template_cm = spec_generator.pun_template_config_map()?;

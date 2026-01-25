@@ -13,5 +13,5 @@ pub enum Error {
     #[error("Failed to find OOD instance: {0}")]
     OODResolutionFailed(#[source] kube::Error),
     #[error("Internal Failure: {0}")]
-    InvalidPodTemplate(&'static str)
+    InvalidPodTemplate(&'static str),
 }

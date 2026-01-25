@@ -9,7 +9,5 @@ pub enum Error {
     #[error("Failed to patch status on fep: {0}")]
     StatusPatchError(#[source] kube::Error),
     #[error("Failed to resolve OOD on fep: {0}")]
-    OODResolutionFailed(#[source] kube::Error)
-
+    OODResolutionFailed(#[source] kube::Error),
 }
-
