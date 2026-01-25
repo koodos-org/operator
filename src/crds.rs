@@ -1,5 +1,5 @@
 use k8s_openapi::{
-    api::core::v1::{ImageVolumeSource, ObjectReference, Volume, VolumeMount},
+    api::core::v1::{ImageVolumeSource, ObjectReference, PodSpec, Volume, VolumeMount},
     apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition,
     apimachinery::pkg::apis::meta::v1::Condition,
 };
@@ -33,6 +33,7 @@ pub struct PunStatus {
 #[kube(shortname = "punclass")]
 pub struct PunClassSpec {
     pub httpd: HTTPDObj,
+    pub deployment_template: Option<PodSpec>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -82,7 +83,7 @@ pub struct OpenOnDemandSpec {
 pub struct OpenOnDemandStatus {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
-    pub config_hash: Option<String>
+    pub config_hash: Option<String>,
 }
 
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]

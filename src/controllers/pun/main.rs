@@ -6,6 +6,7 @@ use crate::pun::generator;
 use crate::utils::status::PUNConditions;
 use anyhow::Result;
 use futures::{StreamExt, TryStreamExt};
+use k8s_openapi::Resource;
 use k8s_openapi::api::{apps::v1::Deployment, core::v1::*};
 use kube::ResourceExt;
 use kube::{
@@ -118,6 +119,8 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     let deployment =
         generator::build_deployment(&generator, &punclass, labels, volumes, volume_mounts)?;
 
+    let patch = punclass.spec.deployment_template;
+
     let deployment_name = deployment
         .metadata
         .name
@@ -138,10 +141,65 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         .patch(
             deployment_name,
             &PatchParams::apply("pun.ondemand.dev"),
+            // &Patch::Apply(&deployment_patch),
             &Patch::Apply(&deployment),
         )
         .await
         .map_err(Error::PunPodCreationFailed)?;
+    if let Some(patch) = patch {
+        let mut pun_class_patch = serde_json::json!(
+        {
+            "apiVersion": Deployment::API_VERSION,
+            "kind": Deployment::KIND,
+            "spec": {
+                "template": {
+                    "spec" : patch
+                }
+            }
+        }
+        );
+
+        fn extract_container_name(deployment: &Deployment) -> Option<String> {
+            Some(
+                deployment
+                    .spec
+                    .as_ref()?
+                    .template
+                    .spec
+                    .as_ref()?
+                    .containers
+                    .get(0)?
+                    .name
+                    .clone(),
+            )
+        }
+
+        let main_container_name = extract_container_name(&deployment).ok_or(
+            Error::InvalidPodTemplate("Internal failure caused by deployment spec violation"),
+        )?;
+
+        let patch: json_patch::Patch = serde_json::from_value(serde_json::json!([
+    {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/0/name",
+        "value": main_container_name
+    }
+    ])).map_err(|_|Error::InvalidPodTemplate("Failed to serialize patch of first container in pun class template, this container will always be used to replace fields on the primary PUN container"))
+    ?;
+
+        json_patch::patch(&mut pun_class_patch, &patch).map_err(|_| {
+            Error::InvalidPodTemplate("Failed to patch template with name replacement")
+        })?;
+        deployment_api
+            .patch(
+                deployment_name,
+                &PatchParams::apply("punclass.ondemand.dev"),
+                &Patch::Apply(&pun_class_patch),
+            )
+            .await
+            .map_err(Error::PunPodCreationFailed)?;
+    }
+
     svc_api
         .patch(
             svc.metadata
