@@ -2,7 +2,7 @@
 #![allow(clippy::unnecessary_lazy_evaluations)]
 use crate::controllers::ood::generator::OODSpecGenerator;
 use crate::controllers::ood::types::Error;
-use crate::crds::{FrontEndProxy, OpenOnDemand};
+use crate::crds::{FrontEndProxy, OpenOnDemand, Pun};
 use crate::utils::status::OODConditions;
 use anyhow::Result;
 use futures::StreamExt;
@@ -16,7 +16,7 @@ use kube::{
         watcher,
     },
 };
-use kube_runtime::reflector::ObjectRef;
+use kube_runtime::finalizer;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::time::Duration;
@@ -242,6 +242,29 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
     Ok(Action::requeue(Duration::from_secs(300)))
 }
 
+async fn cleanup_puns(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Action, Error> {
+    let client = &ctx.client;
+    let ood_instance_name = generator.metadata.name.clone().unwrap();
+
+    let pun_api = Api::<Pun>::all(client.clone());
+
+    let res = pun_api
+        .list(
+            &ListParams::default()
+                .fields(&format!("spec.ood_instance_ref.name={}", ood_instance_name)),
+        )
+        .await;
+    if let Ok(puns) = res {
+        for pun in puns {
+            let pun_api = Api::<Pun>::namespaced(client.clone(), &pun.metadata.namespace.unwrap());
+            pun_api
+                .delete(&pun.metadata.name.unwrap(), &DeleteParams::default())
+                .await
+                .unwrap();
+        }
+    };
+    Ok(Action::await_change())
+}
 /// The controller triggers this on reconcile errors
 fn error_policy(_object: Arc<OpenOnDemand>, _error: &Error, _ctx: Arc<Data>) -> Action {
     Action::requeue(Duration::from_secs(1))
@@ -262,11 +285,37 @@ pub async fn controller() -> Result<()> {
     // limit the controller to running a maximum of two concurrent reconciliations
     let config = Config::default().concurrency(2);
 
-    Controller::new(oods, watcher::Config::default())
+    Controller::new(oods.clone(), watcher::Config::default())
         .owns(feps, watcher::Config::default())
         .with_config(config)
         .shutdown_on_signal()
-        .run(reconcile, error_policy, Arc::new(Data { client }))
+        .run(
+            |generator, ctx| {
+                let namespace = generator
+                    .metadata
+                    .namespace
+                    .clone()
+                    .unwrap_or("default".to_string());
+                let ood_api = Api::namespaced(ctx.client.clone(), &namespace);
+                async move {
+                    finalizer(
+                        &ood_api,
+                        "ondemand-pun.dev/cleanup",
+                        generator,
+                        |event| async {
+                            match event {
+                                finalizer::Event::Apply(ood) => reconcile(ood, ctx).await,
+                                finalizer::Event::Cleanup(ood) => cleanup_puns(ood, ctx).await,
+                            }
+                        },
+                    )
+                    .await
+                    .map_err(|_| Error::FinalizerFailure)
+                }
+            },
+            error_policy,
+            Arc::new(Data { client }),
+        )
         .for_each(|res| async move {
             match res {
                 Ok(o) => info!("reconciled {:?}", o),

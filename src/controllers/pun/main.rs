@@ -57,7 +57,8 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         &generator
             .spec
             .ood_instance_ref
-            .namespace.as_ref()
+            .namespace
+            .as_ref()
             .ok_or(Error::MissingObjectKey(".spec.ood_instance_ref.namespace"))?,
     );
 
@@ -73,7 +74,12 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         .await
         .map_err(Error::OODResolutionFailed)?;
 
-    let hash = ood_instance.status.unwrap().config_hash.unwrap();
+    let hash = ood_instance.status.and_then(|status| status.config_hash);
+    let hash = if let Some(hash) = hash {
+        hash
+    } else {
+        return Ok(Action::requeue(Duration::from_secs(300)));
+    };
 
     let mut labels = generator
         .metadata

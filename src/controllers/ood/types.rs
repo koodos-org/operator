@@ -9,6 +9,8 @@ pub enum Error {
     ListConfigMapFailed(#[source] kube::Error),
     #[error("Failed to clean up config maps: {0}")]
     DeleteConfigMapFailed(#[source] kube::Error),
+    #[error("Failed to clean up puns")]
+    FinalizerFailure
 }
 
 

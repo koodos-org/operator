@@ -62,7 +62,12 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
             .ok_or(Error::MissingObjectKey(".spec.ood_instance_ref.name"))?,
     ).await.map_err(Error::OODResolutionFailed)?;
 
-    let hash = ood_instance.status.unwrap().config_hash.unwrap();
+    let hash = ood_instance.status.and_then(|status| status.config_hash);
+    let hash = if let Some(hash) = hash {
+        hash
+    } else {
+        return Ok(Action::requeue(Duration::from_secs(300)))
+    };
 
     let spec_generator =
         generator::FEPSpecGenerator::new(fep_spec, current_namespace.to_string(), oref, labels, hash);

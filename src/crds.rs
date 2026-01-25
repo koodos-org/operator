@@ -13,7 +13,9 @@ use std::collections::BTreeMap;
     group = "ondemand.dev",
     version = "v1",
     kind = "Pun",
-    status = PunStatus
+    status = PunStatus,
+    selectable = ".spec.ood_instance_ref.name",
+    selectable = ".spec.ood_instance_ref.namespace",
 )]
 #[kube(shortname = "pun", namespaced)]
 pub struct PunSpec {
