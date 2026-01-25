@@ -12,9 +12,10 @@ use k8s_openapi::api::{
     core::v1::*,
     rbac::v1::{Role, RoleBinding},
 };
+use kube::Resource;
 use kube::{
     Client,
-    api::{Api, Patch, PatchParams, Resource},
+    api::{Api, Patch, PatchParams},
     runtime::{
         controller::{Action, Config, Controller},
         watcher,
@@ -153,7 +154,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         .await
         .map_err(Error::HTTPDPodCreationFailed)?;
 
-    let new_deployment = deployment_api
+    let mut new_deployment = deployment_api
         .patch(
             deployment
                 .metadata
@@ -166,6 +167,62 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         .await
         .map_err(Error::HTTPDPodCreationFailed)?;
 
+    let patch = generator.spec.httpd.deployment_template.clone();
+    // If user provied patch exists apply patch with a different manager string to force conflict
+    // if the user tries to edit a field that this controller sets.
+    if let Some(patch) = patch {
+        let mut pun_class_patch = serde_json::json!(
+        {
+            "apiVersion": <Deployment as k8s_openapi::Resource>::API_VERSION,
+            "kind": <Deployment as k8s_openapi::Resource>::KIND,
+            "spec": {
+                "template": {
+                    "spec" : patch
+                }
+            }
+        }
+        );
+
+        fn extract_container_name(deployment: &Deployment) -> Option<String> {
+            Some(
+                deployment
+                    .spec
+                    .as_ref()?
+                    .template
+                    .spec
+                    .as_ref()?
+                    .containers
+                    .get(0)?
+                    .name
+                    .clone(),
+            )
+        }
+
+        let main_container_name = extract_container_name(&deployment).ok_or(
+            Error::InvalidPodTemplate("Internal failure caused by deployment spec violation"),
+        )?;
+
+        let patch: json_patch::Patch = serde_json::from_value(serde_json::json!([
+    {
+        "op": "replace",
+        "path": "/spec/template/spec/containers/0/name",
+        "value": main_container_name
+    }
+    ])).map_err(|_|Error::InvalidPodTemplate("Failed to serialize patch of first container in pun class template, this container will always be used to replace fields on the primary PUN container"))
+    ?;
+
+        json_patch::patch(&mut pun_class_patch, &patch).map_err(|_| {
+            Error::InvalidPodTemplate("Failed to patch template with name replacement")
+        })?;
+        new_deployment = deployment_api
+            .patch(
+                deployment_name,
+                &PatchParams::apply("punclass.ondemand.dev"),
+                &Patch::Apply(&pun_class_patch),
+            )
+            .await
+            .map_err(Error::HTTPDPodCreationFailed)?;
+    }
     // Check status of async resources
     let mut conditions = FEPConditions::new();
     let conditions = 'cond_check: {
@@ -185,13 +242,15 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
             .and_then(|status| status.ready_replicas);
 
         // If spec is current and pods are ready
-        if ready_pods == Some(1) {
+        if ready_pods == generator.spec.httpd.replicas.or(Some(1)) {
             info!("Deployment is ready; PUN is ready");
-            conditions.deployment(
-                generator.metadata.generation,
-                "Deployment has ready pod".to_string(),
-                "True".to_string(),
-            );
+            if let Some(npods) = ready_pods {
+                conditions.deployment(
+                    generator.metadata.generation,
+                    format!("Deployment has {npods} ready pods"),
+                    "True".to_string(),
+                );
+            }
             conditions.ready(
                 generator.metadata.generation,
                 "Deployment ready, PUN ready".to_string(),

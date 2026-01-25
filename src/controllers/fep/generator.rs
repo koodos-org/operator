@@ -254,6 +254,7 @@ spec:
         let deploy = Deployment {
             metadata: self.get_base_obj_metadata(format!("{}-fep", self.spec.name.clone()))?,
             spec: Some(DeploymentSpec {
+                replicas: self.spec.httpd.replicas,
                 selector: LabelSelector {
                     match_expressions: None,
                     match_labels: Some(self.labels.clone()),

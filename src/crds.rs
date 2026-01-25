@@ -1,5 +1,5 @@
 use k8s_openapi::{
-    api::core::v1::{ImageVolumeSource, ObjectReference, PodSpec, Volume, VolumeMount},
+    api::core::v1::{ImageVolumeSource, ObjectReference, PodSpec},
     apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition,
     apimachinery::pkg::apis::meta::v1::Condition,
 };
@@ -33,14 +33,13 @@ pub struct PunStatus {
 #[kube(shortname = "punclass")]
 pub struct PunClassSpec {
     pub httpd: HTTPDObj,
-    pub deployment_template: Option<PodSpec>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct HTTPDObj {
     pub image: String,
-    pub extra_volume_mounts: Option<Vec<VolumeMount>>,
-    pub extra_volumes: Option<Vec<Volume>>,
+    pub replicas: Option<i32>,
+    pub deployment_template: Option<PodSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]

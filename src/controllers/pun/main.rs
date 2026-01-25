@@ -113,13 +113,10 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     // Generate desired state specs
     let svc = generator::generate_svc(&generator, labels.clone())?;
 
-    let (volumes, volume_mounts) =
-        generator::generate_volumes_mounts(&generator, &punclass, &iapps, hash)?;
+    let (volumes, volume_mounts) = generator::generate_volumes_mounts(&generator, &iapps, hash)?;
 
     let deployment =
         generator::build_deployment(&generator, &punclass, labels, volumes, volume_mounts)?;
-
-    let patch = punclass.spec.deployment_template;
 
     let deployment_name = deployment
         .metadata
@@ -137,7 +134,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     let current_deploy_gen = current_deployment.and_then(|dep| dep.metadata.generation);
 
     // Update World to match desired state
-    let new_deployment = deployment_api
+    let mut new_deployment = deployment_api
         .patch(
             deployment_name,
             &PatchParams::apply("pun.ondemand.dev"),
@@ -146,6 +143,10 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         )
         .await
         .map_err(Error::PunPodCreationFailed)?;
+
+    let patch = punclass.spec.httpd.deployment_template;
+    // If user provided patch exists apply patch with a different manager string to force conflict
+    // if the user tries to edit a field that this controller sets.
     if let Some(patch) = patch {
         let mut pun_class_patch = serde_json::json!(
         {
@@ -190,7 +191,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         json_patch::patch(&mut pun_class_patch, &patch).map_err(|_| {
             Error::InvalidPodTemplate("Failed to patch template with name replacement")
         })?;
-        deployment_api
+        new_deployment = deployment_api
             .patch(
                 deployment_name,
                 &PatchParams::apply("punclass.ondemand.dev"),

@@ -133,18 +133,12 @@ pub fn generate_svc(pun: &Pun, labels: BTreeMap<String, String>) -> Result<Servi
 
 pub fn generate_volumes_mounts(
     pun: &Pun,
-    punclass: &PunClass,
     iapps: &ObjectList<InteractiveApp>,
     config_hash: String,
 ) -> Result<(Vec<Volume>, Vec<VolumeMount>), Error> {
     let ood_instance_name = get_ood_instance_name(pun)?;
-    let mut volumes = punclass.spec.httpd.extra_volumes.clone().unwrap_or(vec![]);
-    let mut volume_mounts = punclass
-        .spec
-        .httpd
-        .extra_volume_mounts
-        .clone()
-        .unwrap_or(vec![]);
+    let mut volumes = vec![];
+    let mut volume_mounts = vec![];
 
     let config_vol = Volume {
         name: "clusters-d".to_string(),

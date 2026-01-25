@@ -10,4 +10,6 @@ pub enum Error {
     StatusPatchError(#[source] kube::Error),
     #[error("Failed to resolve OOD on fep: {0}")]
     OODResolutionFailed(#[source] kube::Error),
+    #[error("Failed to apply template: {0}")]
+    InvalidPodTemplate(&'static str),
 }
