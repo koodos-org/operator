@@ -10,4 +10,6 @@ pub enum Error {
     SvcCreationFailed(#[source] kube::Error),
     #[error("Failed to find PunClass: {0}")]
     PunClassNotFound(#[source] kube::Error),
+    #[error("Failed to find OOD instance: {0}")]
+    OODResolutionFailed(#[source] kube::Error)
 }

@@ -135,6 +135,7 @@ pub fn generate_volumes_mounts(
     pun: &Pun,
     punclass: &PunClass,
     iapps: &ObjectList<InteractiveApp>,
+    config_hash: String,
 ) -> Result<(Vec<Volume>, Vec<VolumeMount>), Error> {
     let ood_instance_name = get_ood_instance_name(pun)?;
     let mut volumes = punclass.spec.httpd.extra_volumes.clone().unwrap_or(vec![]);
@@ -148,7 +149,10 @@ pub fn generate_volumes_mounts(
     let config_vol = Volume {
         name: "clusters-d".to_string(),
         config_map: Some(ConfigMapVolumeSource {
-            name: format!("{}-ood-cluster-config-files", ood_instance_name),
+            name: format!(
+                "{}-ood-cluster-config-files-{}",
+                ood_instance_name, config_hash
+            ),
             ..Default::default()
         }),
         ..Default::default()

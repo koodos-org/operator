@@ -52,6 +52,28 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     let deployment_api = Api::<Deployment>::namespaced(client.clone(), current_namespace);
     let punclass_api = Api::<PunClass>::all(client.clone());
     let svc_api = Api::<Service>::namespaced(client.clone(), current_namespace);
+    let ood_api = Api::<OpenOnDemand>::namespaced(
+        client.clone(),
+        &generator
+            .spec
+            .ood_instance_ref
+            .namespace.as_ref()
+            .ok_or(Error::MissingObjectKey(".spec.ood_instance_ref.namespace"))?,
+    );
+
+    let ood_instance = ood_api
+        .get_status(
+            generator
+                .spec
+                .ood_instance_ref
+                .name
+                .as_ref()
+                .ok_or(Error::MissingObjectKey(".spec.ood_instance_ref.name"))?,
+        )
+        .await
+        .map_err(Error::OODResolutionFailed)?;
+
+    let hash = ood_instance.status.unwrap().config_hash.unwrap();
 
     let mut labels = generator
         .metadata
@@ -85,7 +107,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     let svc = generator::generate_svc(&generator, labels.clone())?;
 
     let (volumes, volume_mounts) =
-        generator::generate_volumes_mounts(&generator, &punclass, &iapps)?;
+        generator::generate_volumes_mounts(&generator, &punclass, &iapps, hash)?;
 
     let deployment =
         generator::build_deployment(&generator, &punclass, labels, volumes, volume_mounts)?;
