@@ -273,6 +273,7 @@ pub async fn controller() -> Result<()> {
     let svcs = Api::<Service>::all(client.clone());
     let oods = Api::<OpenOnDemand>::all(client.clone());
     let puns = Api::<Pun>::all(client.clone());
+    let punclasses = Api::<PunClass>::all(client.clone());
 
     // Create store to store PUN objects in local cache
     let (child_reader, child_writer) = reflector::store();
@@ -291,14 +292,27 @@ pub async fn controller() -> Result<()> {
     });
 
     let config = Config::default().concurrency(2);
+    let punclass_store_reader = child_reader.clone();
+    let ood_store_reader = child_reader.clone();
+
 
     Controller::new(feps, watcher::Config::default())
         .owns(deployments, watcher::Config::default())
         .owns(svcs, watcher::Config::default())
+        .watches(punclasses, watcher::Config::default(), move |punclass| {
+            let punclass_name = punclass.metadata.name;
+
+            punclass_store_reader
+                .state()
+                .iter()
+                .filter(move |pun| pun.spec.pun_class_ref.name == punclass_name)
+                .map(|pun| pun.to_object_ref(()))
+                .collect::<Vec<ObjectRef<Pun>>>()
+        })
         .watches(oods, watcher::Config::default(), move |ood| {
             let ood_name = ood.metadata.name.unwrap().clone();
             // Query store for PUNs with matching ood_instance_ref name
-            child_reader
+            ood_store_reader
                 .state()
                 .iter()
                 .filter(move |pun| pun.spec.ood_instance_ref.name.as_ref().unwrap() == &ood_name)
