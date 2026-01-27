@@ -29,7 +29,9 @@ use tracing::*;
 async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Action, Error> {
     let client = &ctx.client;
 
-    let oref = generator.controller_owner_ref(&()).ok_or(Error::MissingObjectKey("owner_ref"))?;
+    let oref = generator
+        .controller_owner_ref(&())
+        .ok_or(Error::MissingObjectKey("owner_ref"))?;
     let fep_spec = generator.spec.clone();
     let labels = generator
         .metadata

@@ -27,7 +27,9 @@ pub fn build_deployment(
     volume_mounts: Vec<VolumeMount>,
 ) -> Result<Deployment, Error> {
     let ood_instance_name = get_ood_instance_name(&pun)?;
-    let oref = pun.controller_owner_ref(&()).ok_or(Error::MissingObjectKey("owner_ref"))?;
+    let oref = pun
+        .controller_owner_ref(&())
+        .ok_or(Error::MissingObjectKey("owner_ref"))?;
     let current_namespace = pun
         .metadata
         .namespace
@@ -46,7 +48,10 @@ pub fn build_deployment(
             name: Some(format!(
                 "{}-nginx-{}",
                 ood_instance_name,
-                pun.metadata.name.clone().ok_or(Error::MissingObjectKey(".metadata.name"))?
+                pun.metadata
+                    .name
+                    .clone()
+                    .ok_or(Error::MissingObjectKey(".metadata.name"))?
             )),
             namespace: Some(current_namespace.to_string()),
             labels: Some(labels.clone()),
@@ -98,7 +103,9 @@ pub fn build_deployment(
 }
 
 pub fn generate_svc(pun: &Pun, labels: BTreeMap<String, String>) -> Result<Service, Error> {
-    let oref = pun.controller_owner_ref(&()).ok_or(Error::MissingObjectKey("owner_ref"))?;
+    let oref = pun
+        .controller_owner_ref(&())
+        .ok_or(Error::MissingObjectKey("owner_ref"))?;
     let current_namespace = pun
         .metadata
         .namespace

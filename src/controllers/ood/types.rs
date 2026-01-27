@@ -14,5 +14,5 @@ pub enum Error {
     #[error("Failed to create api: {0}")]
     ApiCreationFailure(#[source] kube::Error),
     #[error("Generic failure: {0}")]
-    GenericError(&'static str)
+    GenericError(&'static str),
 }

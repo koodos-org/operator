@@ -15,5 +15,5 @@ pub enum Error {
     #[error("Internal Failure: {0}")]
     InvalidPodTemplate(&'static str),
     #[error("API request error: {0}")]
-    ApiError(#[source] kube::Error)
+    ApiError(#[source] kube::Error),
 }
