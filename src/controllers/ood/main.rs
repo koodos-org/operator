@@ -25,8 +25,8 @@ use tracing::*;
 /// Controller triggers this whenever our main object or our children changed
 async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Action, Error> {
     let client = &ctx.client;
-    let oref = generator.controller_owner_ref(&()).unwrap();
-    let ood_instance_name = generator.metadata.name.clone().unwrap();
+    let oref = generator.controller_owner_ref(&()).ok_or(Error::GenericError("No owner ref from object"))?;
+    let ood_instance_name = generator.metadata.name.clone().ok_or(Error::MissingObjectKey(".metadata.name"))?;
     let current_namespace = generator
         .metadata
         .namespace
@@ -73,20 +73,28 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
     // Hash based CMs
     cm_api
         .patch(
-            ood_cm.metadata.name.as_ref().unwrap(),
+            ood_cm
+                .metadata
+                .name
+                .as_ref()
+                .ok_or(Error::MissingObjectKey(".metadata.name"))?,
             &PatchParams::apply("openondemands.ondemand.dev"),
             &Patch::Apply(&ood_cm),
         )
         .await
-        .unwrap();
+        .map_err(Error::ApiCreationFailure)?;
     cm_api
         .patch(
-            clusters_cm.metadata.name.as_ref().unwrap(),
+            clusters_cm
+                .metadata
+                .name
+                .as_ref()
+                .ok_or(Error::MissingObjectKey(".metadata.name"))?,
             &PatchParams::apply("openondemands.ondemand.dev"),
             &Patch::Apply(&clusters_cm),
         )
         .await
-        .unwrap();
+        .map_err(Error::ApiCreationFailure)?;
 
     let hash_status = serde_json::json!({
         "status": {
@@ -96,38 +104,38 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
 
     ood_api
         .patch_status(
-            &generator.metadata.name.clone().unwrap(),
+            &generator.metadata.name.clone().ok_or(Error::MissingObjectKey(".metadata.name"))?,
             &PatchParams::default(),
             &Patch::Merge(hash_status),
         )
         .await
-        .unwrap();
+        .map_err(Error::ApiCreationFailure)?;
 
     // Apply desired state
     cm_api
         .patch(
-            ood_cm.metadata.name.as_ref().unwrap(),
+            ood_cm.metadata.name.as_ref().ok_or(Error::MissingObjectKey(".metadata.name"))?,
             &PatchParams::apply("openondemands.ondemand.dev"),
             &Patch::Apply(&ood_cm),
         )
         .await
-        .unwrap();
+        .map_err(Error::ApiCreationFailure)?;
     cm_api
         .patch(
-            clusters_cm.metadata.name.as_ref().unwrap(),
+            clusters_cm.metadata.name.as_ref().ok_or(Error::MissingObjectKey(".metadata.name"))?,
             &PatchParams::apply("openondemands.ondemand.dev"),
             &Patch::Apply(&clusters_cm),
         )
         .await
-        .unwrap();
+        .map_err(Error::ApiCreationFailure)?;
     let new_fep = fep_api
         .patch(
-            fep.metadata.name.as_ref().unwrap(),
+            fep.metadata.name.as_ref().ok_or(Error::MissingObjectKey(".metadata.name"))?,
             &PatchParams::apply("frontendproxies.ondemand.dev"),
             &Patch::Apply(&fep),
         )
         .await
-        .unwrap();
+        .map_err(Error::ApiCreationFailure)?;
     svc_api
         .patch(
             svc.metadata
@@ -182,12 +190,12 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
 
     ood_api
         .patch_status(
-            &generator.metadata.name.clone().unwrap(),
+            &generator.metadata.name.clone().ok_or(Error::MissingObjectKey(".metadata.name"))?,
             &PatchParams::default(),
             &Patch::Merge(status),
         )
         .await
-        .unwrap();
+        .map_err(Error::ApiCreationFailure)?;
 
     // Clean up old config maps
     let config_maps = cm_api
@@ -210,11 +218,11 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
     for cm in ood_cms.iter().rev().skip(5) {
         cm_api
             .delete(
-                &cm.metadata.name.as_ref().unwrap(),
+                &cm.metadata.name.as_ref().ok_or(Error::MissingObjectKey(".metadata.name"))?,
                 &DeleteParams::default(),
             )
             .await
-            .map_err(Error::DeleteConfigMapFailed)?;
+            .map_err(Error::DeleteFailed)?;
     }
 
     let cluster_cms = config_maps.clone();
@@ -232,11 +240,11 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
     for cm in cluster_cms.iter().rev().skip(5) {
         cm_api
             .delete(
-                &cm.metadata.name.as_ref().unwrap(),
+                &cm.metadata.name.as_ref().ok_or(Error::MissingObjectKey(".metadata.name"))?,
                 &DeleteParams::default(),
             )
             .await
-            .map_err(Error::DeleteConfigMapFailed)?;
+            .map_err(Error::DeleteFailed)?;
     }
 
     Ok(Action::requeue(Duration::from_secs(300)))
@@ -244,7 +252,7 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
 
 async fn cleanup_puns(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Action, Error> {
     let client = &ctx.client;
-    let ood_instance_name = generator.metadata.name.clone().unwrap();
+    let ood_instance_name = generator.metadata.name.clone().ok_or(Error::MissingObjectKey(".metadata.name"))?;
 
     let pun_api = Api::<Pun>::all(client.clone());
 
@@ -256,11 +264,11 @@ async fn cleanup_puns(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Ac
         .await;
     if let Ok(puns) = res {
         for pun in puns {
-            let pun_api = Api::<Pun>::namespaced(client.clone(), &pun.metadata.namespace.unwrap());
+            let pun_api = Api::<Pun>::namespaced(client.clone(), &pun.metadata.namespace.ok_or(Error::MissingObjectKey(".metadata.namespace"))?);
             pun_api
-                .delete(&pun.metadata.name.unwrap(), &DeleteParams::default())
+                .delete(&pun.metadata.name.ok_or(Error::MissingObjectKey(".metadata.name"))?, &DeleteParams::default())
                 .await
-                .unwrap();
+                .map_err(Error::DeleteFailed)?;
         }
     };
     Ok(Action::await_change())
@@ -310,7 +318,7 @@ pub async fn controller() -> Result<()> {
                         },
                     )
                     .await
-                    .map_err(|_| Error::FinalizerFailure)
+                    .map_err(|e| Error::FinalizerFailure(Box::new(e)))
                 }
             },
             error_policy,

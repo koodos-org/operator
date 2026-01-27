@@ -108,7 +108,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     let iapps_api = Api::<InteractiveApp>::namespaced(client.clone(), current_namespace);
 
     let lp = ListParams::default().labels(&format!("ood-cluster={}", ood_instance_name));
-    let iapps = iapps_api.list(&lp).await.unwrap();
+    let iapps = iapps_api.list(&lp).await.map_err(Error::ApiError)?;
 
     // Generate desired state specs
     let svc = generator::generate_svc(&generator, labels.clone())?;
@@ -295,7 +295,6 @@ pub async fn controller() -> Result<()> {
     let punclass_store_reader = child_reader.clone();
     let ood_store_reader = child_reader.clone();
 
-
     Controller::new(feps, watcher::Config::default())
         .owns(deployments, watcher::Config::default())
         .owns(svcs, watcher::Config::default())
@@ -310,12 +309,12 @@ pub async fn controller() -> Result<()> {
                 .collect::<Vec<ObjectRef<Pun>>>()
         })
         .watches(oods, watcher::Config::default(), move |ood| {
-            let ood_name = ood.metadata.name.unwrap().clone();
+            let ood_name = ood.metadata.name;
             // Query store for PUNs with matching ood_instance_ref name
             ood_store_reader
                 .state()
                 .iter()
-                .filter(move |pun| pun.spec.ood_instance_ref.name.as_ref().unwrap() == &ood_name)
+                .filter(move |pun| pun.spec.ood_instance_ref.name == ood_name && ood_name.is_some())
                 .map(|pun| pun.to_object_ref(()))
                 .collect::<Vec<ObjectRef<Pun>>>()
         })

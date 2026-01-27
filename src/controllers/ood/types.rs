@@ -7,8 +7,12 @@ pub enum Error {
     MissingObjectKey(&'static str),
     #[error("Failed to query config maps: {0}")]
     ListConfigMapFailed(#[source] kube::Error),
-    #[error("Failed to clean up config maps: {0}")]
-    DeleteConfigMapFailed(#[source] kube::Error),
-    #[error("Failed to clean up puns")]
-    FinalizerFailure,
+    #[error("Failed to delete: {0}")]
+    DeleteFailed(#[source] kube::Error),
+    #[error("Failed to clean up puns: {0}")]
+    FinalizerFailure(#[source] Box<kube_runtime::finalizer::Error<crate::ood::types::Error>>),
+    #[error("Failed to create api: {0}")]
+    ApiCreationFailure(#[source] kube::Error),
+    #[error("Generic failure: {0}")]
+    GenericError(&'static str)
 }
