@@ -91,14 +91,6 @@ pub struct InteractiveAppSpec {
     pub source: ImageVolumeSource,
 }
 
-#[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[kube(group = "ondemand.dev", version = "v1", kind = "ComputeCluster")]
-#[kube(shortname = "cmpcl", namespaced)]
-pub struct ComputeClusterSpec {
-    #[serde(rename = "cluster.yml.erb")]
-    pub cluster_yml_erb: String,
-    pub name: String,
-}
 
 pub fn export_crds() -> String {
     fn crd_to_string(crd: CustomResourceDefinition) -> String {
@@ -109,11 +101,10 @@ pub fn export_crds() -> String {
     let pun_class = crd_to_string(PunClass::crd());
     let ood = crd_to_string(OpenOnDemand::crd());
     let ia = crd_to_string(InteractiveApp::crd());
-    let cluster = crd_to_string(ComputeCluster::crd());
     let fep = crd_to_string(FrontEndProxy::crd());
 
     let mut crd_bundle = String::new();
-    for crd in vec![pun, pun_class, ood, ia, cluster, fep] {
+    for crd in vec![pun, pun_class, ood, ia, fep] {
         crd_bundle += &format!("---\n{crd}\n");
     }
     crd_bundle
