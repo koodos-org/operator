@@ -88,7 +88,6 @@ pub struct OpenOnDemandStatus {
 #[kube(group = "ondemand.dev", version = "v1", kind = "InteractiveApp")]
 #[kube(shortname = "ia", namespaced)]
 pub struct InteractiveAppSpec {
-    pub name: String,
     pub source: ImageVolumeSource,
 }
 

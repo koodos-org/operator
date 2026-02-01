@@ -162,14 +162,19 @@ pub fn generate_volumes_mounts(
 
     for iapp in iapps {
         let iapp_vol = iapp.spec.source.clone();
+        let iapp_name = iapp
+            .meta()
+            .name
+            .as_ref()
+            .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
         volumes.push(Volume {
             image: Some(iapp_vol),
-            name: iapp.spec.name.clone(),
+            name: iapp_name.clone(),
             ..Default::default()
         });
         volume_mounts.push(VolumeMount {
-            name: iapp.spec.name.clone(),
-            mount_path: format!("/var/www/ood/apps/sys/{}", iapp.spec.name),
+            name: iapp_name.clone(),
+            mount_path: format!("/var/www/ood/apps/sys/{}", iapp_name.clone()),
             ..Default::default()
         })
     }
