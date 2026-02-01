@@ -130,7 +130,6 @@ impl OODSpecGenerator {
         Ok(FrontEndProxy {
             metadata: self.get_base_obj_metadata(self.ood_instance_name.clone())?,
             spec: FrontEndProxySpec {
-                name: format!("{}", self.ood_instance_name),
                 pun_class_ref: self.spec.pun_class_ref.clone(),
                 ood_instance_ref: object_ref,
                 httpd: self.spec.httpd.clone(),

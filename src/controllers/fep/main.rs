@@ -77,6 +77,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     };
 
     let spec_generator = generator::FEPSpecGenerator::new(
+        fep_name.clone(),
         fep_spec,
         current_namespace.to_string(),
         oref,

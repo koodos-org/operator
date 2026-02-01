@@ -16,6 +16,7 @@ use k8s_openapi::{
 use kube::api::ObjectMeta;
 
 pub struct FEPSpecGenerator {
+    base_name: String,
     spec: FrontEndProxySpec,
     current_namespace: String,
     oref: OwnerReference,
@@ -25,6 +26,7 @@ pub struct FEPSpecGenerator {
 
 impl FEPSpecGenerator {
     pub fn new(
+        base_name: String,
         spec: FrontEndProxySpec,
         current_namespace: String,
         oref: OwnerReference,
@@ -32,6 +34,7 @@ impl FEPSpecGenerator {
         config_hash: String,
     ) -> Self {
         FEPSpecGenerator {
+            base_name,
             spec,
             current_namespace,
             oref,
@@ -230,7 +233,7 @@ spec:
     }
     pub fn deployment(&self) -> Result<Deployment, Error> {
         let pod = Pod {
-            metadata: self.get_base_obj_metadata(self.spec.name.clone())?,
+            metadata: self.get_base_obj_metadata(self.base_name.clone())?,
             spec: Some(PodSpec {
                 service_account_name: Some(format!("{}-fep-svc-acct", self.ood_instance_name()?)),
                 containers: vec![Container {
@@ -241,7 +244,7 @@ spec:
                     }]),
                     image: Some(self.spec.httpd.image.clone()),
                     image_pull_policy: Some("Always".to_string()),
-                    name: self.spec.name.clone(),
+                    name: self.base_name.clone(),
                     volume_mounts: Some(self.volume_mounts()?),
                     ..Default::default()
                 }],
@@ -252,7 +255,7 @@ spec:
         };
 
         let deploy = Deployment {
-            metadata: self.get_base_obj_metadata(format!("{}-fep", self.spec.name.clone()))?,
+            metadata: self.get_base_obj_metadata(format!("{}-fep", self.base_name))?,
             spec: Some(DeploymentSpec {
                 replicas: self.spec.httpd.replicas,
                 selector: LabelSelector {

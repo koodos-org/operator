@@ -51,7 +51,6 @@ pub struct FEPStatus {
 #[kube(group = "ondemand.dev", version = "v1", kind = "FrontEndProxy", status = FEPStatus)]
 #[kube(shortname = "fep", namespaced)]
 pub struct FrontEndProxySpec {
-    pub name: String,
     pub httpd: HTTPDObj,
     pub pun_class_ref: Option<ObjectReference>,
     pub ood_instance_ref: ObjectReference,
