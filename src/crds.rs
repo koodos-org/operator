@@ -56,6 +56,12 @@ pub struct FrontEndProxySpec {
     pub ood_instance_ref: ObjectReference,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct AdvancedFeatures {
+    pub pod_per_pun: Option<bool>,
+    pub managed_applications: Option<bool>,
+}
+
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[kube(
     group = "ondemand.dev",
@@ -75,6 +81,7 @@ pub struct OpenOnDemandSpec {
     pub httpd: HTTPDObj,
     /// Container spec parameters for PUN level pods
     pub pun_class_ref: Option<ObjectReference>,
+    pub advanced_features: Option<AdvancedFeatures>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
@@ -90,7 +97,6 @@ pub struct OpenOnDemandStatus {
 pub struct InteractiveAppSpec {
     pub source: ImageVolumeSource,
 }
-
 
 pub fn export_crds() -> String {
     fn crd_to_string(crd: CustomResourceDefinition) -> String {

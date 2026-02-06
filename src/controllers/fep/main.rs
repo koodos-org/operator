@@ -13,6 +13,7 @@ use k8s_openapi::api::{
     rbac::v1::{Role, RoleBinding},
 };
 use kube::Resource;
+use kube::api::ListParams;
 use kube::{
     Client,
     api::{Api, Patch, PatchParams},
@@ -56,18 +57,26 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     let deployment_api = Api::<Deployment>::namespaced(client.clone(), current_namespace);
     let fep_api = Api::<FrontEndProxy>::namespaced(client.clone(), current_namespace);
     let ood_api = Api::<OpenOnDemand>::namespaced(client.clone(), current_namespace);
+    let iapps_api = Api::<InteractiveApp>::namespaced(client.clone(), current_namespace);
+
+    let ood_instance_name = generator
+        .spec
+        .ood_instance_ref
+        .name
+        .as_ref()
+        .ok_or(Error::MissingObjectKey(".spec.ood_instance_ref.name"))?;
 
     let ood_instance = ood_api
-        .get_status(
-            generator
-                .spec
-                .ood_instance_ref
-                .name
-                .as_ref()
-                .ok_or(Error::MissingObjectKey(".spec.ood_instance_ref.name"))?,
-        )
+        .get_status(ood_instance_name)
         .await
         .map_err(Error::OODResolutionFailed)?;
+
+    let iapps = if generator.spec.pun_class_ref.is_none() {
+        let lp = ListParams::default().labels(&format!("ood-cluster={}", ood_instance_name));
+        Some(iapps_api.list(&lp).await.map_err(Error::ApiError)?)
+    } else {
+        None
+    };
 
     let hash = ood_instance.status.and_then(|status| status.config_hash);
     let hash = if let Some(hash) = hash {
@@ -86,10 +95,10 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     );
     // Generate state
     let service_account = spec_generator.service_account()?;
-    let template_cm = spec_generator.pun_template_config_map()?;
+    let template_cm = spec_generator.pun_template_config_map();
     let role_binding = spec_generator.role_binding()?;
     let role = spec_generator.role()?;
-    let deployment = spec_generator.deployment()?;
+    let deployment = spec_generator.deployment(iapps)?;
 
     // Read current state
     let deployment_name = deployment
@@ -144,18 +153,21 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         .await
         .map_err(Error::HTTPDPodCreationFailed)?;
 
-    cm_api
-        .patch(
-            template_cm
-                .metadata
-                .name
-                .as_ref()
-                .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
-            &PatchParams::apply("deployments"),
-            &Patch::Apply(&template_cm),
-        )
-        .await
-        .map_err(Error::HTTPDPodCreationFailed)?;
+    // If the pun template file exists; apply
+    if let Ok(template_cm) = template_cm {
+        cm_api
+            .patch(
+                template_cm
+                    .metadata
+                    .name
+                    .as_ref()
+                    .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
+                &PatchParams::apply("deployments"),
+                &Patch::Apply(&template_cm),
+            )
+            .await
+            .map_err(Error::HTTPDPodCreationFailed)?;
+    }
 
     let mut new_deployment = deployment_api
         .patch(
@@ -174,7 +186,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     // If user provied patch exists apply patch with a different manager string to force conflict
     // if the user tries to edit a field that this controller sets.
     if let Some(patch) = patch {
-        let mut pun_class_patch = serde_json::json!(
+        let mut deployment_patch = serde_json::json!(
         {
             "apiVersion": <Deployment as k8s_openapi::Resource>::API_VERSION,
             "kind": <Deployment as k8s_openapi::Resource>::KIND,
@@ -214,14 +226,14 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     ])).map_err(|_|Error::InvalidPodTemplate("Failed to serialize patch of first container in pun class template, this container will always be used to replace fields on the primary PUN container"))
     ?;
 
-        json_patch::patch(&mut pun_class_patch, &patch).map_err(|_| {
+        json_patch::patch(&mut deployment_patch, &patch).map_err(|_| {
             Error::InvalidPodTemplate("Failed to patch template with name replacement")
         })?;
         new_deployment = deployment_api
             .patch(
                 deployment_name,
-                &PatchParams::apply("punclass.ondemand.dev"),
-                &Patch::Apply(&pun_class_patch),
+                &PatchParams::apply("ood.ondemand.dev"),
+                &Patch::Apply(&deployment_patch),
             )
             .await
             .map_err(Error::HTTPDPodCreationFailed)?;

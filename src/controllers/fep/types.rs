@@ -12,4 +12,6 @@ pub enum Error {
     OODResolutionFailed(#[source] kube::Error),
     #[error("Failed to apply template: {0}")]
     InvalidPodTemplate(&'static str),
+    #[error("API request error: {0}")]
+    ApiError(#[source] kube::Error),
 }

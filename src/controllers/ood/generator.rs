@@ -78,8 +78,19 @@ impl OODSpecGenerator {
             serde_yaml::from_str::<serde_yaml::Value>(&self.spec.nginx_stage_yml.clone()).unwrap();
 
         // Merge site configs into base config. Note that the site config overrides the base config
-        merge_yaml(&mut krood_portal_config, site_portal_config);
-        merge_yaml(&mut krood_nginx_stage_config, site_nginx_stage_config);
+        if self
+            .spec
+            .advanced_features
+            .as_ref()
+            .and_then(|a| a.pod_per_pun)
+            .unwrap_or(false)
+        {
+            merge_yaml(&mut krood_portal_config, site_portal_config);
+            merge_yaml(&mut krood_nginx_stage_config, site_nginx_stage_config);
+        } else {
+            krood_portal_config = site_portal_config;
+            krood_nginx_stage_config = site_nginx_stage_config;
+        }
 
         config_files.insert(
             "ood_portal.yml".to_string(),

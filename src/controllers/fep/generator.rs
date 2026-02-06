@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::{controllers::fep::types::Error, crds::FrontEndProxySpec};
+use crate::{
+    controllers::fep::types::Error,
+    crds::{FrontEndProxySpec, InteractiveApp},
+};
 use anyhow::Result;
 use k8s_openapi::{
     api::{
@@ -13,7 +16,7 @@ use k8s_openapi::{
     },
     apimachinery::pkg::apis::meta::v1::{LabelSelector, OwnerReference},
 };
-use kube::api::ObjectMeta;
+use kube::api::{ObjectList, ObjectMeta};
 
 pub struct FEPSpecGenerator {
     base_name: String,
@@ -68,7 +71,7 @@ impl FEPSpecGenerator {
             .ok_or_else(|| Error::MissingObjectKey(".spec.pun_class_ref"))?
             .name
             .clone()
-            .ok_or_else(|| Error::MissingObjectKey(".spec.ood_instance_ref.name"))
+            .ok_or_else(|| Error::MissingObjectKey(".spec.pun_class_ref.name"))
     }
     pub fn pun_template_config_map(&self) -> Result<ConfigMap, Error> {
         let pun_class_name = self.pun_class_name()?;
@@ -160,22 +163,39 @@ spec:
         })
     }
 
-    fn volumes(&self) -> Result<Vec<Volume>, Error> {
+    fn volumes(&self, iapps: Option<ObjectList<InteractiveApp>>) -> Result<Vec<Volume>, Error> {
         let mut volumes = vec![];
-        let template_cm_vol = Volume {
-            config_map: Some(ConfigMapVolumeSource {
-                name: format!(
-                    "pun-{}-{}-class-template",
-                    self.pun_class_name()?,
-                    self.ood_instance_name()?,
-                ),
-                ..Default::default()
-            }),
-            name: "pun-template".to_string(),
-            ..Default::default()
+        if let Some(iapps) = iapps {
+            for iapp in iapps {
+                let iapp_vol = iapp.spec.source.clone();
+                let iapp_name = iapp
+                    .metadata
+                    .name
+                    .as_ref()
+                    .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
+                volumes.push(Volume {
+                    image: Some(iapp_vol),
+                    name: iapp_name.clone(),
+                    ..Default::default()
+                });
+            }
         };
 
-        volumes.push(template_cm_vol);
+        if let Ok(pun_class_name) = self.pun_class_name() {
+            let template_cm_vol = Volume {
+                config_map: Some(ConfigMapVolumeSource {
+                    name: format!(
+                        "pun-{}-{}-class-template",
+                        pun_class_name,
+                        self.ood_instance_name()?,
+                    ),
+                    ..Default::default()
+                }),
+                name: "pun-template".to_string(),
+                ..Default::default()
+            };
+            volumes.push(template_cm_vol);
+        }
         let config_volume = Volume {
             name: "ood-portal".to_string(),
             config_map: Some(ConfigMapVolumeSource {
@@ -205,15 +225,34 @@ spec:
         Ok(volumes)
     }
 
-    fn volume_mounts(&self) -> Result<Vec<VolumeMount>, Error> {
+    fn volume_mounts(
+        &self,
+        iapps: Option<ObjectList<InteractiveApp>>,
+    ) -> Result<Vec<VolumeMount>, Error> {
         let mut volume_mounts = vec![];
-        let template_cm_vol_mount = VolumeMount {
-            mount_path: "/opt/krood/utils/templates".to_string(),
-            name: "pun-template".to_string(),
-            ..Default::default()
-        };
+        if let Some(iapps) = iapps {
+            for iapp in iapps {
+                let iapp_name = iapp
+                    .metadata
+                    .name
+                    .as_ref()
+                    .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?;
+                volume_mounts.push(VolumeMount {
+                    name: iapp_name.clone(),
+                    mount_path: format!("/var/www/ood/apps/sys/{}", iapp_name.clone()),
+                    ..Default::default()
+                })
+            }
+        }
+        if self.spec.pun_class_ref.is_some() {
+            let template_cm_vol_mount = VolumeMount {
+                mount_path: "/opt/krood/utils/templates".to_string(),
+                name: "pun-template".to_string(),
+                ..Default::default()
+            };
 
-        volume_mounts.push(template_cm_vol_mount);
+            volume_mounts.push(template_cm_vol_mount);
+        }
         let config_vol_mount = VolumeMount {
             mount_path: "/etc/ood/config/ood_portal.yml".to_string(),
             name: "ood-portal".to_string(),
@@ -231,7 +270,10 @@ spec:
 
         Ok(volume_mounts)
     }
-    pub fn deployment(&self) -> Result<Deployment, Error> {
+    pub fn deployment(
+        &self,
+        iapps: Option<ObjectList<InteractiveApp>>,
+    ) -> Result<Deployment, Error> {
         let pod = Pod {
             metadata: self.get_base_obj_metadata(self.base_name.clone())?,
             spec: Some(PodSpec {
@@ -245,10 +287,10 @@ spec:
                     image: Some(self.spec.httpd.image.clone()),
                     image_pull_policy: Some("Always".to_string()),
                     name: self.base_name.clone(),
-                    volume_mounts: Some(self.volume_mounts()?),
+                    volume_mounts: Some(self.volume_mounts(iapps.clone())?),
                     ..Default::default()
                 }],
-                volumes: Some(self.volumes()?),
+                volumes: Some(self.volumes(iapps)?),
                 ..Default::default()
             }),
             ..Default::default()
