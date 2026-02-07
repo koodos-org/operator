@@ -196,6 +196,7 @@ spec:
             };
             volumes.push(template_cm_vol);
         }
+
         let config_volume = Volume {
             name: "ood-portal".to_string(),
             config_map: Some(ConfigMapVolumeSource {
@@ -260,6 +261,14 @@ spec:
             ..Default::default()
         };
         volume_mounts.push(config_vol_mount);
+
+        let stage_vol_mount = VolumeMount {
+            mount_path: "/etc/ood/config/nginx_stage.yml".to_string(),
+            name: "ood-portal".to_string(),
+            sub_path: Some("nginx_stage.yml".to_string()),
+            ..Default::default()
+        };
+        volume_mounts.push(stage_vol_mount);
 
         let cluster_volume_mount = VolumeMount {
             mount_path: "/etc/ood/config/clusters.d".to_string(),
