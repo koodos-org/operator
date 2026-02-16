@@ -161,14 +161,17 @@ impl OODSpecGenerator {
     }
 
     pub fn svc(&self) -> Result<Service, Error> {
+        let mut metadata = self.get_base_obj_metadata(self.ood_instance_name.clone())?;
+        if let Some(service_tmp) = &self.spec.service {
+            metadata.annotations = service_tmp.annotations.clone();
+        }
         Ok(Service {
-            metadata: self.get_base_obj_metadata(self.ood_instance_name.clone())?,
+            metadata: metadata,
             spec: Some(ServiceSpec {
                 ports: Some(vec![ServicePort {
                     port: 443,
                     ..Default::default()
                 }]),
-                type_: Some("LoadBalancer".to_string()),
                 selector: Some(self.labels.clone()),
                 ..Default::default()
             }),

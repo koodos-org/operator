@@ -7,10 +7,11 @@ use crate::utils::status::OODConditions;
 use anyhow::Result;
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::*;
+use kube::Resource;
 use kube::api::{DeleteParams, ListParams};
 use kube::{
     Client,
-    api::{Api, Patch, PatchParams, Resource},
+    api::{Api, Patch, PatchParams},
     runtime::{
         controller::{Action, Config, Controller},
         watcher,
@@ -128,19 +129,42 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
                 .name
                 .as_ref()
                 .ok_or(Error::MissingObjectKey(".metadata.name"))?,
-            &PatchParams::apply("frontendproxies.ondemand.dev"),
+            &PatchParams::apply("openondemands.ondemand.dev"),
             &Patch::Apply(&fep),
         )
         .await
         .map_err(Error::ApiCreationFailure)?;
+
+    let svc_template = &generator.spec.service;
+    let svc_value = &mut serde_json::to_value(&svc)
+        .map_err(|_| Error::GenericError("Failed to parse object"))?;
+    // If user provided patch exists apply patch with a different manager string to force conflict
+    // if the user tries to edit a field that this controller sets.
+    if let Some(svc_template) = svc_template {
+        let service_patch = serde_json::json!(
+        {
+            "apiVersion": <Service as k8s_openapi::Resource>::API_VERSION,
+            "kind": <Service as k8s_openapi::Resource>::KIND,
+            "metadata":{
+                "name": svc.metadata
+                    .name
+                    .as_ref()
+                    .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?
+            },
+            "spec": svc_template.spec
+        }
+        );
+
+        json_patch::merge(svc_value, &service_patch);
+    }
     svc_api
         .patch(
             svc.metadata
                 .name
                 .as_ref()
-                .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-            &PatchParams::apply("frontendproxies.ondemand.dev"),
-            &Patch::Apply(&svc),
+                .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
+            &PatchParams::apply("openondemands.ondemand.dev"),
+            &Patch::Apply(&svc_value),
         )
         .await
         .map_err(Error::SvcCreationFailed)?;

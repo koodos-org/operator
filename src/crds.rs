@@ -1,5 +1,5 @@
 use k8s_openapi::{
-    api::core::v1::{ImageVolumeSource, ObjectReference, PodSpec},
+    api::core::v1::{ImageVolumeSource, ObjectReference, PodSpec, ServiceSpec},
     apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition,
     apimachinery::pkg::apis::meta::v1::Condition,
 };
@@ -62,6 +62,11 @@ pub struct AdvancedFeatures {
     pub managed_applications: Option<bool>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct ServiceTemplate {
+    pub annotations: Option<BTreeMap<String, String>>,
+    pub spec: Option<ServiceSpec>,
+}
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[kube(
     group = "ondemand.dev",
@@ -81,6 +86,8 @@ pub struct OpenOnDemandSpec {
     pub ondemand_configs: Option<BTreeMap<String, String>>,
     /// Container spec parameters for FEP level pods
     pub httpd: HTTPDObj,
+
+    pub service: Option<ServiceTemplate>,
     /// Container spec parameters for PUN level pods
     pub pun_class_ref: Option<ObjectReference>,
     pub advanced_features: Option<AdvancedFeatures>,

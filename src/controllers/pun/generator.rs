@@ -147,13 +147,22 @@ pub fn generate_volumes_mounts(
     let mut volumes = vec![];
     let mut volume_mounts = vec![];
 
+    // ondemand.d/* files
+    let ondemand_config = Volume {
+        name: "ondemand-d".to_string(),
+        config_map: Some(ConfigMapVolumeSource {
+            optional: Some(true),
+            name: format!("{}-ondemand-{}", ood_instance_name, config_hash),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    volumes.push(ondemand_config);
+
     let cluster_config_vol = Volume {
         name: "clusters-d".to_string(),
         config_map: Some(ConfigMapVolumeSource {
-            name: format!(
-                "{}-ood-clusters-{}",
-                ood_instance_name, config_hash
-            ),
+            name: format!("{}-ood-clusters-{}", ood_instance_name, config_hash),
             ..Default::default()
         }),
         ..Default::default()
@@ -188,6 +197,13 @@ pub fn generate_volumes_mounts(
             ..Default::default()
         })
     }
+
+    let ondemand_volume_mount = VolumeMount {
+        mount_path: "/etc/ood/config/ondemand.d".to_string(),
+        name: "ondemand-d".to_string(),
+        ..Default::default()
+    };
+    volume_mounts.push(ondemand_volume_mount);
 
     let cluster_volume_mount = VolumeMount {
         mount_path: "/etc/ood/config/clusters.d".to_string(),
