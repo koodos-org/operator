@@ -147,28 +147,28 @@ pub fn generate_volumes_mounts(
     let mut volumes = vec![];
     let mut volume_mounts = vec![];
 
-    let config_vol = Volume {
+    let cluster_config_vol = Volume {
         name: "clusters-d".to_string(),
         config_map: Some(ConfigMapVolumeSource {
             name: format!(
-                "{}-ood-cluster-config-files-{}",
+                "{}-ood-clusters-{}",
                 ood_instance_name, config_hash
             ),
             ..Default::default()
         }),
         ..Default::default()
     };
-    volumes.push(config_vol);
+    volumes.push(cluster_config_vol);
 
-    let stage_config_volume = Volume {
-        name: "ood-portal".to_string(),
+    let nginx_stage_volume = Volume {
+        name: "nginx-stage".to_string(),
         config_map: Some(ConfigMapVolumeSource {
-            name: format!("{}-ood-config-files-{}", ood_instance_name, config_hash),
+            name: format!("{}-nginx-stage-{}", ood_instance_name, config_hash),
             ..Default::default()
         }),
         ..Default::default()
     };
-    volumes.push(stage_config_volume);
+    volumes.push(nginx_stage_volume);
 
     for iapp in iapps {
         let iapp_vol = iapp.spec.source.clone();
@@ -199,7 +199,7 @@ pub fn generate_volumes_mounts(
 
     let stage_vol_mount = VolumeMount {
         mount_path: "/etc/ood/config/nginx_stage.yml".to_string(),
-        name: "ood-portal".to_string(),
+        name: "nginx-stage".to_string(),
         sub_path: Some("nginx_stage.yml".to_string()),
         ..Default::default()
     };

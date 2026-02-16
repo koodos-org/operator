@@ -197,11 +197,13 @@ spec:
             volumes.push(template_cm_vol);
         }
 
-        let config_volume = Volume {
-            name: "ood-portal".to_string(),
+        // ondemand.d/* files
+        let ondemand_config = Volume {
+            name: "ondemand-d".to_string(),
             config_map: Some(ConfigMapVolumeSource {
+                optional: Some(true),
                 name: format!(
-                    "{}-ood-config-files-{}",
+                    "{}-ondemand-{}",
                     self.ood_instance_name()?,
                     self.config_hash
                 ),
@@ -209,12 +211,44 @@ spec:
             }),
             ..Default::default()
         };
-        volumes.push(config_volume);
+        volumes.push(ondemand_config);
+
+        // NGINX stage config
+        let nginx_stage_config = Volume {
+            name: "nginx-stage".to_string(),
+            config_map: Some(ConfigMapVolumeSource {
+                name: format!(
+                    "{}-nginx-stage-{}",
+                    self.ood_instance_name()?,
+                    self.config_hash
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        volumes.push(nginx_stage_config);
+
+        // Portal Config
+        let portal_config = Volume {
+            name: "ood-portal".to_string(),
+            config_map: Some(ConfigMapVolumeSource {
+                name: format!(
+                    "{}-ood-portal-{}",
+                    self.ood_instance_name()?,
+                    self.config_hash
+                ),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        volumes.push(portal_config);
+        // Clusters
         let cluster_volume = Volume {
             name: "clusters-d".to_string(),
             config_map: Some(ConfigMapVolumeSource {
+                optional: Some(true),
                 name: format!(
-                    "{}-ood-cluster-config-files-{}",
+                    "{}-ood-clusters-{}",
                     self.ood_instance_name()?,
                     self.config_hash
                 ),
@@ -264,7 +298,7 @@ spec:
 
         let stage_vol_mount = VolumeMount {
             mount_path: "/etc/ood/config/nginx_stage.yml".to_string(),
-            name: "ood-portal".to_string(),
+            name: "nginx-stage".to_string(),
             sub_path: Some("nginx_stage.yml".to_string()),
             ..Default::default()
         };
@@ -276,6 +310,13 @@ spec:
             ..Default::default()
         };
         volume_mounts.push(cluster_volume_mount);
+
+        let ondemand_volume_mount = VolumeMount {
+            mount_path: "/etc/ood/config/ondemand.d".to_string(),
+            name: "ondemand-d".to_string(),
+            ..Default::default()
+        };
+        volume_mounts.push(ondemand_volume_mount);
 
         Ok(volume_mounts)
     }

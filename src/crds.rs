@@ -76,7 +76,9 @@ pub struct OpenOnDemandSpec {
     #[serde(rename = "nginx_stage.yml")]
     pub nginx_stage_yml: String,
     #[serde(rename = "clusters.d")]
-    pub clusters: BTreeMap<String, String>,
+    pub clusters: Option<BTreeMap<String, String>>,
+    #[serde(rename = "ondemand.d")]
+    pub ondemand_configs: Option<BTreeMap<String, String>>,
     /// Container spec parameters for FEP level pods
     pub httpd: HTTPDObj,
     /// Container spec parameters for PUN level pods

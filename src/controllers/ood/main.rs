@@ -57,51 +57,51 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
 
     // Generate desired state
     let svc = spec_generator.svc()?;
-    let mut ood_cm = spec_generator.ood_cm()?;
-    let mut clusters_cm = spec_generator.cluster_cm()?;
+    let fep = spec_generator.fep(generator.object_ref(&()))?;
+
+    let ood_cm = spec_generator.ood_cm()?;
+    let nginx_stage_cm = spec_generator.nginx_stage_cm()?;
+    let clusters_cm = spec_generator.cluster_cm()?;
+    let ondemand_conf_cm = spec_generator.ondemand_cm()?;
+    let mut config_maps = vec![
+        Some(ood_cm),
+        Some(nginx_stage_cm),
+        clusters_cm,
+        ondemand_conf_cm,
+    ];
     let mut hash_state = DefaultHasher::new();
     // Hash generation so that old config maps are not reused
     generator.metadata.generation.hash(&mut hash_state);
-    ood_cm.data.hash(&mut hash_state);
-    clusters_cm.data.hash(&mut hash_state);
+    for cm in &config_maps {
+        cm.as_ref().map(|cm| cm.data.hash(&mut hash_state));
+    }
     let config_hash = format!("{:x}", hash_state.finish());
-    ood_cm.metadata.name = ood_cm
-        .metadata
-        .name
-        .map(|name| format!("{name}-{config_hash}"));
-    clusters_cm.metadata.name = clusters_cm
-        .metadata
-        .name
-        .map(|name| format!("{name}-{config_hash}"));
-
-    let fep = spec_generator.fep(generator.object_ref(&()))?;
-
+    for cm in config_maps.iter_mut() {
+        if let Some(cm) = cm {
+            let hashed_name = cm
+                .metadata
+                .name
+                .clone()
+                .map(|name| format!("{name}-{config_hash}"));
+            cm.metadata.name = hashed_name;
+        }
+    }
     // Hash based CMs
-    cm_api
-        .patch(
-            ood_cm
-                .metadata
-                .name
-                .as_ref()
-                .ok_or(Error::MissingObjectKey(".metadata.name"))?,
-            &PatchParams::apply("openondemands.ondemand.dev"),
-            &Patch::Apply(&ood_cm),
-        )
-        .await
-        .map_err(Error::ApiCreationFailure)?;
-    cm_api
-        .patch(
-            clusters_cm
-                .metadata
-                .name
-                .as_ref()
-                .ok_or(Error::MissingObjectKey(".metadata.name"))?,
-            &PatchParams::apply("openondemands.ondemand.dev"),
-            &Patch::Apply(&clusters_cm),
-        )
-        .await
-        .map_err(Error::ApiCreationFailure)?;
-
+    for cm in config_maps {
+        if let Some(cm) = cm {
+            cm_api
+                .patch(
+                    cm.metadata
+                        .name
+                        .as_ref()
+                        .ok_or(Error::MissingObjectKey(".metadata.name"))?,
+                    &PatchParams::apply("openondemands.ondemand.dev"),
+                    &Patch::Apply(&cm),
+                )
+                .await
+                .map_err(Error::ApiCreationFailure)?;
+        }
+    }
     let hash_status = serde_json::json!({
         "status": {
             "config_hash": config_hash
@@ -122,30 +122,6 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
         .map_err(Error::ApiCreationFailure)?;
 
     // Apply desired state
-    cm_api
-        .patch(
-            ood_cm
-                .metadata
-                .name
-                .as_ref()
-                .ok_or(Error::MissingObjectKey(".metadata.name"))?,
-            &PatchParams::apply("openondemands.ondemand.dev"),
-            &Patch::Apply(&ood_cm),
-        )
-        .await
-        .map_err(Error::ApiCreationFailure)?;
-    cm_api
-        .patch(
-            clusters_cm
-                .metadata
-                .name
-                .as_ref()
-                .ok_or(Error::MissingObjectKey(".metadata.name"))?,
-            &PatchParams::apply("openondemands.ondemand.dev"),
-            &Patch::Apply(&clusters_cm),
-        )
-        .await
-        .map_err(Error::ApiCreationFailure)?;
     let new_fep = fep_api
         .patch(
             fep.metadata

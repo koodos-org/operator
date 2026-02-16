@@ -240,6 +240,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
     }
     // Check status of async resources
     let mut conditions = FEPConditions::new();
+
     let conditions = 'cond_check: {
         // If deployment spec was updated we have to wait for an new event to trust deployment status
         if current_deploy_gen != new_deployment.metadata.generation {

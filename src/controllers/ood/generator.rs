@@ -63,21 +63,49 @@ impl OODSpecGenerator {
             ..Default::default()
         })
     }
+    pub fn nginx_stage_cm(&self) -> Result<ConfigMap, Error> {
+        // Base configs to make the custom proxy and stage logic work in the container
+        let mut krood_nginx_stage_config =
+            serde_yaml::from_str(include_str!("../../../assets/nginx_stage.yml")).unwrap();
+
+        let site_nginx_config =
+            serde_yaml::from_str::<serde_yaml::Value>(&self.spec.nginx_stage_yml).unwrap();
+
+        if self
+            .spec
+            .advanced_features
+            .as_ref()
+            .and_then(|a| a.pod_per_pun)
+            .unwrap_or(false)
+        {
+            merge_yaml(&mut krood_nginx_stage_config, site_nginx_config);
+        } else {
+            krood_nginx_stage_config = site_nginx_config;
+        }
+        // Merge site configs into base config. Note that the site config overrides the base config
+        let mut cm_data = BTreeMap::new();
+        cm_data.insert(
+            "nginx_stage.yml".to_string(),
+            serde_yaml::to_string(&krood_nginx_stage_config).unwrap(),
+        );
+        return Ok(ConfigMap {
+            metadata: self
+                .get_base_obj_metadata(format!("{}-nginx-stage", self.ood_instance_name.clone()))?,
+            data: Some(cm_data),
+            ..Default::default()
+        });
+    }
 
     pub fn ood_cm(&self) -> Result<ConfigMap, Error> {
         // Base configs to make the custom proxy and stage logic work in the container
         let mut krood_portal_config =
             serde_yaml::from_str(include_str!("../../../assets/ood_portal.yml")).unwrap();
-        let mut krood_nginx_stage_config =
-            serde_yaml::from_str(include_str!("../../../assets/nginx_stage.yml")).unwrap();
 
         let mut config_files = BTreeMap::new();
-        let site_portal_config =
-            serde_yaml::from_str::<serde_yaml::Value>(&self.spec.ood_portal_yml.clone()).unwrap();
-        let site_nginx_stage_config =
-            serde_yaml::from_str::<serde_yaml::Value>(&self.spec.nginx_stage_yml.clone()).unwrap();
 
-        // Merge site configs into base config. Note that the site config overrides the base config
+        let site_portal_config =
+            serde_yaml::from_str::<serde_yaml::Value>(&self.spec.ood_portal_yml).unwrap();
+
         if self
             .spec
             .advanced_features
@@ -86,39 +114,50 @@ impl OODSpecGenerator {
             .unwrap_or(false)
         {
             merge_yaml(&mut krood_portal_config, site_portal_config);
-            merge_yaml(&mut krood_nginx_stage_config, site_nginx_stage_config);
         } else {
             krood_portal_config = site_portal_config;
-            krood_nginx_stage_config = site_nginx_stage_config;
         }
-
         config_files.insert(
             "ood_portal.yml".to_string(),
             serde_yaml::to_string(&krood_portal_config).unwrap(),
         );
-        config_files.insert(
-            "nginx_stage.yml".to_string(),
-            serde_yaml::to_string(&krood_nginx_stage_config).unwrap(),
-        );
-        Ok(ConfigMap {
-            metadata: self.get_base_obj_metadata(format!(
-                "{}-ood-config-files",
-                self.ood_instance_name.clone()
-            ))?,
+
+        return Ok(ConfigMap {
+            metadata: self
+                .get_base_obj_metadata(format!("{}-ood-portal", self.ood_instance_name.clone()))?,
             data: Some(config_files),
             ..Default::default()
-        })
+        });
     }
 
-    pub fn cluster_cm(&self) -> Result<ConfigMap, Error> {
-        Ok(ConfigMap {
-            metadata: self.get_base_obj_metadata(format!(
-                "{}-ood-cluster-config-files",
-                self.ood_instance_name.clone()
-            ))?,
-            data: Some(self.spec.clusters.clone()),
-            ..Default::default()
-        })
+    pub fn cluster_cm(&self) -> Result<Option<ConfigMap>, Error> {
+        if let Some(clusters) = self.spec.clusters.clone() {
+            Ok(Some(ConfigMap {
+                metadata: self.get_base_obj_metadata(format!(
+                    "{}-ood-clusters",
+                    self.ood_instance_name.clone()
+                ))?,
+                data: Some(clusters),
+                ..Default::default()
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn ondemand_cm(&self) -> Result<Option<ConfigMap>, Error> {
+        if let Some(ondemand_configs) = self.spec.ondemand_configs.clone() {
+            Ok(Some(ConfigMap {
+                metadata: self.get_base_obj_metadata(format!(
+                    "{}-ondemand",
+                    self.ood_instance_name.clone()
+                ))?,
+                data: Some(ondemand_configs),
+                ..Default::default()
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn svc(&self) -> Result<Service, Error> {
