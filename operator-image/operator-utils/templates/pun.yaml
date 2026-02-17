@@ -1,4 +1,4 @@
-apiVersion: ondemand.dev/v1
+apiVersion: ondemand.krood.dev/v1alpha1
 kind: Pun
 metadata:
   name: "$DNS_OOD_USER"

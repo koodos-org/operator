@@ -26,4 +26,4 @@ export DNS_OOD_USER="${OOD_USER//\./"-"}"
 export OOD_USER
 export NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
 export OOD_INSTANCE=$(cat /opt/krood/labels/ood-cluster)
-curl -X POST  -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/yaml" --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt --data-binary @<(envsubst < /opt/krood/utils/templates/pun.yaml ) https://kubernetes.default.svc/apis/ondemand.dev/v1/namespaces/$NAMESPACE/puns
+curl -X POST  -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" -H "Content-Type: application/yaml" --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt --data-binary @<(envsubst < /opt/krood/utils/templates/pun.yaml ) https://kubernetes.default.svc/apis/ondemand.krood.dev/v1alpha1/namespaces/$NAMESPACE/puns
