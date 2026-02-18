@@ -96,7 +96,7 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
                         .name
                         .as_ref()
                         .ok_or(Error::MissingObjectKey(".metadata.name"))?,
-                    &PatchParams::apply("openondemands.ondemand.dev"),
+                    &PatchParams::apply("krood-openondemand-controller"),
                     &Patch::Apply(&cm),
                 )
                 .await
@@ -129,7 +129,7 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
                 .name
                 .as_ref()
                 .ok_or(Error::MissingObjectKey(".metadata.name"))?,
-            &PatchParams::apply("openondemands.ondemand.dev"),
+            &PatchParams::apply("krood-openondemand-controller"),
             &Patch::Apply(&fep),
         )
         .await
@@ -163,7 +163,7 @@ async fn reconcile(generator: Arc<OpenOnDemand>, ctx: Arc<Data>) -> Result<Actio
                 .name
                 .as_ref()
                 .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
-            &PatchParams::apply("openondemands.ondemand.dev"),
+            &PatchParams::apply("krood-openondemand-controller"),
             &Patch::Apply(&svc_value),
         )
         .await

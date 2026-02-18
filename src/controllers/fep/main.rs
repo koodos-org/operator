@@ -182,7 +182,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         .await
         .map_err(Error::HTTPDPodCreationFailed)?;
 
-    let patch = generator.spec.httpd.deployment_template.clone();
+    let patch = generator.spec.deployment_template.pod_template.clone();
     // If user provied patch exists apply patch with a different manager string to force conflict
     // if the user tries to edit a field that this controller sets.
     if let Some(patch) = patch {
@@ -191,9 +191,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
             "apiVersion": <Deployment as k8s_openapi::Resource>::API_VERSION,
             "kind": <Deployment as k8s_openapi::Resource>::KIND,
             "spec": {
-                "template": {
-                    "spec" : patch
-                }
+                "template": patch
             }
         }
         );
@@ -232,7 +230,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
         new_deployment = deployment_api
             .patch(
                 deployment_name,
-                &PatchParams::apply("ood.ondemand.dev"),
+                &PatchParams::apply("krood-fep-controller"),
                 &Patch::Apply(&deployment_patch),
             )
             .await
@@ -258,7 +256,7 @@ async fn reconcile(generator: Arc<FrontEndProxy>, ctx: Arc<Data>) -> Result<Acti
             .and_then(|status| status.ready_replicas);
 
         // If spec is current and pods are ready
-        if ready_pods == generator.spec.httpd.replicas.or(Some(1)) {
+        if ready_pods == generator.spec.deployment_template.replicas.or(Some(1)) {
             info!("Deployment is ready; PUN is ready");
             if let Some(npods) = ready_pods {
                 conditions.deployment(

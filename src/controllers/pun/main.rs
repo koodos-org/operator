@@ -137,14 +137,14 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
     let mut new_deployment = deployment_api
         .patch(
             deployment_name,
-            &PatchParams::apply("pun.ondemand.dev"),
+            &PatchParams::apply("krood-pun-controller"),
             // &Patch::Apply(&deployment_patch),
             &Patch::Apply(&deployment),
         )
         .await
         .map_err(Error::PunPodCreationFailed)?;
 
-    let patch = punclass.spec.httpd.deployment_template;
+    let patch = punclass.spec.deployment_template.pod_template;
     // If user provided patch exists apply patch with a different manager string to force conflict
     // if the user tries to edit a field that this controller sets.
     if let Some(patch) = patch {
@@ -153,9 +153,7 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
             "apiVersion": Deployment::API_VERSION,
             "kind": Deployment::KIND,
             "spec": {
-                "template": {
-                    "spec" : patch
-                }
+                "template": patch
             }
         }
         );
@@ -191,10 +189,11 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
         json_patch::patch(&mut pun_class_patch, &patch).map_err(|_| {
             Error::InvalidPodTemplate("Failed to patch template with name replacement")
         })?;
+
         new_deployment = deployment_api
             .patch(
                 deployment_name,
-                &PatchParams::apply("punclass.ondemand.dev"),
+                &PatchParams::apply("krood-punclass-controller"),
                 &Patch::Apply(&pun_class_patch),
             )
             .await
@@ -206,8 +205,8 @@ async fn reconcile(generator: Arc<Pun>, ctx: Arc<Data>) -> Result<Action, Error>
             svc.metadata
                 .name
                 .as_ref()
-                .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?,
-            &PatchParams::apply("pun.ondemand.dev"),
+                .ok_or_else(|| Error::MissingObjectKey(".metadata.name"))?,
+            &PatchParams::apply("krood-pun-controller"),
             &Patch::Apply(&svc),
         )
         .await

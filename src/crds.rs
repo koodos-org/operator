@@ -1,5 +1,5 @@
 use k8s_openapi::{
-    api::core::v1::{ImageVolumeSource, ObjectReference, PodSpec, ServiceSpec},
+    api::core::v1::{ImageVolumeSource, ObjectReference, PodTemplateSpec, ServiceSpec},
     apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition,
     apimachinery::pkg::apis::meta::v1::Condition,
 };
@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[kube(
-    group = "ondemand.dev",
-    version = "v1",
+    group = "ondemand.krood.dev",
+    version = "v1alpha1",
     kind = "Pun",
     status = PunStatus,
     selectable = ".spec.ood_instance_ref.name",
@@ -29,17 +29,17 @@ pub struct PunStatus {
     pub conditions: Vec<Condition>,
 }
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[kube(group = "ondemand.dev", version = "v1", kind = "PunClass")]
+#[kube(group = "ondemand.krood.dev", version = "v1alpha1", kind = "PunClass")]
 #[kube(shortname = "punclass")]
 pub struct PunClassSpec {
-    pub httpd: HTTPDObj,
+    pub deployment_template: DeploymentConfiguration,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-pub struct HTTPDObj {
+pub struct DeploymentConfiguration {
     pub image: String,
     pub replicas: Option<i32>,
-    pub deployment_template: Option<PodSpec>,
+    pub pod_template: Option<PodTemplateSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
@@ -48,10 +48,10 @@ pub struct FEPStatus {
 }
 
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[kube(group = "ondemand.dev", version = "v1", kind = "FrontEndProxy", status = FEPStatus)]
+#[kube(group = "ondemand.krood.dev", version = "v1alpha1", kind = "FrontEndProxy", status = FEPStatus)]
 #[kube(shortname = "fep", namespaced)]
 pub struct FrontEndProxySpec {
-    pub httpd: HTTPDObj,
+    pub deployment_template: DeploymentConfiguration,
     pub pun_class_ref: Option<ObjectReference>,
     pub ood_instance_ref: ObjectReference,
 }
@@ -69,8 +69,8 @@ pub struct ServiceTemplate {
 }
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[kube(
-    group = "ondemand.dev",
-    version = "v1",
+    group = "ondemand.krood.dev",
+    version = "v1alpha1",
     kind = "OpenOnDemand",
     status = "OpenOnDemandStatus"
 )]
@@ -85,7 +85,7 @@ pub struct OpenOnDemandSpec {
     #[serde(rename = "ondemand.d")]
     pub ondemand_configs: Option<BTreeMap<String, String>>,
     /// Container spec parameters for FEP level pods
-    pub httpd: HTTPDObj,
+    pub deployment_template: DeploymentConfiguration,
 
     pub service: Option<ServiceTemplate>,
     /// Container spec parameters for PUN level pods
@@ -101,7 +101,7 @@ pub struct OpenOnDemandStatus {
 }
 
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[kube(group = "ondemand.dev", version = "v1", kind = "InteractiveApp")]
+#[kube(group = "ondemand.krood.dev", version = "v1alpha1", kind = "InteractiveApp")]
 #[kube(shortname = "ia", namespaced)]
 pub struct InteractiveAppSpec {
     pub source: ImageVolumeSource,

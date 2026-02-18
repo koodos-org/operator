@@ -35,7 +35,7 @@ pub fn build_deployment(
         .namespace
         .as_ref()
         .ok_or_else(|| Error::MissingObjectKey(".metadata.namespace"))?;
-    let image = punclass.spec.httpd.image.clone();
+    let image = punclass.spec.deployment_template.image.clone();
 
     let dns_username = pun
         .metadata

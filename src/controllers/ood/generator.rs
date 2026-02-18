@@ -185,7 +185,7 @@ impl OODSpecGenerator {
             spec: FrontEndProxySpec {
                 pun_class_ref: self.spec.pun_class_ref.clone(),
                 ood_instance_ref: object_ref,
-                httpd: self.spec.httpd.clone(),
+                deployment_template: self.spec.deployment_template.clone(),
             },
             status: None,
         })

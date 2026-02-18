@@ -79,7 +79,7 @@ impl FEPSpecGenerator {
         let current_namespace = self.current_namespace.clone();
         let template_data = format!(
             r#"
-apiVersion: ondemand.dev/v1
+apiVersion: ondemand.krood.dev/v1alpha1
 kind: Pun
 metadata:
     name: "{ood_instance_name}-$DNS_OOD_USER"
@@ -135,7 +135,7 @@ spec:
                 .get_base_obj_metadata(format!("{}-fep-role", self.ood_instance_name()?))?,
             rules: Some(vec![PolicyRule {
                 api_groups: Some(
-                    vec!["ondemand.dev"]
+                    vec!["ondemand.krood.dev"]
                         .iter()
                         .map(|string| string.to_string())
                         .collect(),
@@ -334,7 +334,7 @@ spec:
                         value: Some(self.ood_instance_name()?.to_string()),
                         value_from: None,
                     }]),
-                    image: Some(self.spec.httpd.image.clone()),
+                    image: Some(self.spec.deployment_template.image.clone()),
                     image_pull_policy: Some("Always".to_string()),
                     name: self.base_name.clone(),
                     volume_mounts: Some(self.volume_mounts(iapps.clone())?),
@@ -349,7 +349,7 @@ spec:
         let deploy = Deployment {
             metadata: self.get_base_obj_metadata(format!("{}-fep", self.base_name))?,
             spec: Some(DeploymentSpec {
-                replicas: self.spec.httpd.replicas,
+                replicas: self.spec.deployment_template.replicas,
                 selector: LabelSelector {
                     match_expressions: None,
                     match_labels: Some(self.labels.clone()),
