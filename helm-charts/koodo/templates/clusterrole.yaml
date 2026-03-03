@@ -1,0 +1,107 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "koodo.fullname" . }}
+  labels:
+    {{- include "koodo.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+    - rbac.authorization.k8s.io
+    resources:
+    - roles
+    - rolebindings
+    verbs:
+    - escalate
+    - create
+    - bind
+    - get
+    - list
+    - watch
+    - update
+    - patch
+
+  - apiGroups: [""]
+    resources:
+      - pods
+      - services
+      - configmaps
+      - serviceaccounts
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+
+  - apiGroups: [""]
+    resources:
+      - pods/status
+    verbs:
+      - get
+      - update
+      - patch
+
+  - apiGroups: [""]
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+      - update
+
+  - apiGroups:
+      - ondemand.krood.dev
+    resources:
+      - openondemands
+      - frontendproxies
+      - puns
+      - interactiveapps
+      - punclasses
+    verbs:
+      - get
+      - list
+      - watch
+
+  - apiGroups:
+      - ondemand.krood.dev
+    resources:
+      - openondemands/status 
+      - frontendproxies/status
+      - puns/status 
+      - openondemands
+    verbs:
+      - get
+      - update
+      - patch
+
+  - apiGroups:
+      - ondemand.krood.dev
+    resources:
+      - frontendproxies
+    verbs:
+      - create
+      - update
+      - patch
+
+  - apiGroups:
+      - ondemand.krood.dev
+    resources:
+      - openondemands/finalizers 
+      - frontendproxies/finalizers
+      - puns/finalizers 
+    verbs:
+      - update

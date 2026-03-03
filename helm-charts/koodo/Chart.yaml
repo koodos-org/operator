@@ -1,0 +1,13 @@
+apiVersion: v2
+name: koodo
+description: A Helm chart for Kubernetes Open OnDemand Operator
+
+type: application
+version: 0.0.0
+
+appVersion: "0.0.0"
+
+dependencies:
+  - name: koodo-crds
+    version: "0.0.0"
+    repository: "file://../koodo-crds"

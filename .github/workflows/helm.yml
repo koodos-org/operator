@@ -1,0 +1,60 @@
+name: Integrated CRD & Chart Release
+on:
+  push:
+    # Run on pushes with a semver tag when a helm-charts file has been modified
+    branches: [ 'main' ]
+    # paths: [ 'helm-charts/**' ]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+
+      # Checkout repo
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Install Rust toolchain to run CRD generation
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Helm
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Prepare Versions
+        id: vars
+        run: |
+          # Extract the 7-character short SHA
+          echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build and Push CRD Subchart
+        run: |
+          SHA_VER="0.0.0-${{ steps.vars.outputs.sha }}"
+          CRD_CHART_DIR="helm-charts/koodo-crds"
+          REGISTRY="oci://ghcr.io/${{ github.repository_owner }}/charts"
+          ls
+          ls helm-charts
+          ls helm-charts/koodo-crds
+          cargo run -- crd > "$CRD_CHART_DIR/templates/crds.yaml"
+          yq -i ".version = \"$SHA_VER\"" "$CRD_CHART_DIR/Chart.yaml"
+          yq -i ".appVersion = \"$SHA_VER\"" "$CRD_CHART_DIR/Chart.yaml"
+
+          helm package "$CRD_CHART_DIR"
+          helm push "koodo-crds-${SHA_VER}.tgz" "$REGISTRY"
+
+          OP_CHART_DIR="helm-charts/koodo"
+          OP_VER=$(yq '.version' "$OP_CHART_DIR/Chart.yaml")
+
+          yq -i "(.dependencies[] | select(.name == \"koodo-crds\")).version = \"$SHA_VER\"" "$OP_CHART_DIR/Chart.yaml"
+
+          helm dependency build "$OP_CHART_DIR"
+          helm package "$OP_CHART_DIR"
+          helm push "koodo-${OP_VER}.tgz" "$REGISTRY"
