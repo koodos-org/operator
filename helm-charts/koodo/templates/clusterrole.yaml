@@ -79,6 +79,13 @@ rules:
   - apiGroups:
       - ondemand.krood.dev
     resources:
+      - puns
+    verbs:
+      - delete
+
+  - apiGroups:
+      - ondemand.krood.dev
+    resources:
       - openondemands/status 
       - frontendproxies/status
       - puns/status 
