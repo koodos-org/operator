@@ -128,7 +128,7 @@ pub fn generate_svc(pun: &Pun, labels: BTreeMap<String, String>) -> Result<Servi
         spec: Some(ServiceSpec {
             cluster_ip: Some("None".to_string()),
             ports: Some(vec![ServicePort {
-                port: 443,
+                port: 80,
                 ..Default::default()
             }]),
             selector: Some(labels.clone()),

@@ -86,7 +86,7 @@ http {
   client_max_body_size <%= nginx_file_upload_max %>;
 
   server {
-    listen      443;
+    listen      80;
     server_name localhost;
 
     location @error_404 {
