@@ -36,6 +36,7 @@ function pun_proxy_handler(r)
   local pun_pre_hook_root_cmd = r.subprocess_env['OOD_PUN_PRE_HOOK_ROOT_CMD']
   local allowed_hosts         = r.subprocess_env['OOD_ALLOWED_HOSTS']
   local pun_max_retries       = tonumber(r.subprocess_env['OOD_PUN_MAX_RETRIES'])
+  local pun_port              = 80
 
   -- get the system-level user name
   local user = user_map.map(r, user_map_match, user_map_cmd, user_env and r.subprocess_env[user_env] or r.user)
@@ -53,17 +54,17 @@ function pun_proxy_handler(r)
   local dns_user = user:gsub("%.","-")
   local ood_name = os.getenv("KROOD_OOD_NAME")
   local pun_dns_name = "nginx-" .. ood_name .. "-" .. dns_user
-  conn.server = pun_dns_name .. ":443"
+  conn.server = pun_dns_name .. ":" .. tostring(pun_port)
   conn.uri = r.uri
 
   -- start up PUN if socket doesn't exist
   local count = 0
   local app_init_url = r.is_https and "https://" or "http://"
   app_init_url = app_init_url .. r.hostname .. ":" .. r.port .. nginx_uri .. "/init?redir=$http_x_forwarded_escaped_uri"
-  local ok = is_pod_listening(pun_dns_name,443)
+  local ok = is_pod_listening(pun_dns_name,pun_port)
   if not ok then
         nginx_stage.pun(r, pun_stage_cmd, user, app_init_url, pun_pre_hook_exports, pun_pre_hook_root_cmd, allowed_hosts)
-        while not is_pod_listening(pun_dns_name,443) and count < pun_max_retries do
+        while not is_pod_listening(pun_dns_name,pun_port) and count < pun_max_retries do
             r.usleep(150000)
             count = count + 1
         end
