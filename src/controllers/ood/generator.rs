@@ -164,6 +164,7 @@ impl OODSpecGenerator {
         let mut metadata = self.get_base_obj_metadata(self.ood_instance_name.clone())?;
         if let Some(service_tmp) = &self.spec.service {
             metadata.annotations = service_tmp.annotations.clone();
+            metadata.labels = service_tmp.labels.clone();
         }
         Ok(Service {
             metadata: metadata,

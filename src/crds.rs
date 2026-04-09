@@ -65,6 +65,7 @@ pub struct AdvancedFeatures {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct ServiceTemplate {
     pub annotations: Option<BTreeMap<String, String>>,
+    pub labels: Option<BTreeMap<String, String>>,
     pub spec: Option<ServiceSpec>,
 }
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema)]
